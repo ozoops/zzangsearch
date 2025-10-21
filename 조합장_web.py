@@ -11,7 +11,7 @@ st.title("🧑‍🌾 조합장 정보 검색기")
 st.write("검색 기준을 선택한 뒤 성명 또는 농축협명으로 조합장 정보를 조회할 수 있습니다.")
 
 # ✅ 엑셀 파일명
-EXCEL_FILENAME = "조합장현황.xlsx"
+EXCEL_FILENAME = "조합장 현황.xlsx"
 
 # ✅ 데이터 로딩
 @st.cache_data
