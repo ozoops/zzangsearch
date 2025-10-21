@@ -45,7 +45,7 @@ with col1:
             if search_option == "성명":
                 results = df[df['정제성명'] == search_text]
             else:
-                results = df[df['정제농축협명'] == search_text]
+                results = df[df['정제농축협명'].str.contains(f'^{search_text}$', regex=True)]
             st.session_state.results = results
             st.session_state.query = query
         else:
