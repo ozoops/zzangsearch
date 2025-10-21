@@ -21,7 +21,7 @@ def check_password():
             return False
     except Exception as e:
         st.error(f"오류가 발생했습니다: {e}")
-        st.info("Streamlit Cloud에 배포하는 경우, 먼저 ".streamlit/secrets.toml" 파일에 비밀번호를 설정해야 합니다.")
+        st.info("Streamlit Cloud에 배포하는 경우, 먼저 '.streamlit/secrets.toml' 파일에 비밀번호를 설정해야 합니다.")
         st.code("password = \"YOUR_PASSWORD\"","language=toml")
         return False
 
