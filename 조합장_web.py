@@ -4,6 +4,31 @@ import os
 from datetime import datetime
 from urllib.parse import quote
 
+# --- 비밀번호 기능 ---
+def check_password():
+    """비밀번호가 맞으면 True, 틀리면 False를 반환합니다."""
+    try:
+        # 비밀번호 입력 받기
+        password = st.text_input("🔑 비밀번호를 입력하세요", type="password")
+
+        # .streamlit/secrets.toml에 설정된 비밀번호와 비교
+        if password == st.secrets["password"]:
+            return True
+        elif password: # 사용자가 무언가 입력은 했을 때
+            st.error("😕 비밀번호가 틀렸습니다.")
+            return False
+        else: # 아직 아무것도 입력하지 않았을 때
+            return False
+    except Exception as e:
+        st.error(f"오류가 발생했습니다: {e}")
+        st.info("Streamlit Cloud에 배포하는 경우, 먼저 ".streamlit/secrets.toml" 파일에 비밀번호를 설정해야 합니다.")
+        st.code("password = \"YOUR_PASSWORD\"","language=toml")
+        return False
+
+# --- 앱 시작 ---
+if not check_password():
+    st.stop() # 비밀번호가 맞지 않으면 앱 실행 중단
+
 # 페이지 설정
 st.set_page_config(page_title="조합장 검색기", layout="centered")
 
