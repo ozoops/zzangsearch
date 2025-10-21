@@ -43,9 +43,9 @@ with col1:
             # 새로운 검색이 수행되면 상태 업데이트
             search_text = query.replace('\n', '').replace('\r', '').replace(' ', '').strip()
             if search_option == "성명":
-                results = df[df['정제성명'].str.contains(search_text, na=False)]
+                results = df[df['정제성명'] == search_text]
             else:
-                results = df[df['정제농축협명'].str.contains(search_text, na=False)]
+                results = df[df['정제농축협명'] == search_text]
             st.session_state.results = results
             st.session_state.query = query
         else:
