@@ -14,7 +14,7 @@ st.write("검색 기준을 선택한 뒤 성명 또는 농축협명으로 조합
 EXCEL_FILENAME = "조합장 현황.xlsx"
 
 # ✅ 데이터 로딩
-@st.cache_data
+@st.cache_data(ttl=0)
 def load_data():
     return pd.read_excel(EXCEL_FILENAME, engine='openpyxl')
 
