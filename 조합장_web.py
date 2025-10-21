@@ -24,12 +24,12 @@ df = load_data()
 df['정제성명'] = df['성명'].astype(str).str.replace(' ', '').str.strip()
 df['정제농축협명'] = df['농축협명'].astype(str).str.replace(' ', '').str.strip()
 
-# --- 상태 관리 --- #
+# --- 상태 관리 ---
 if 'results' not in st.session_state:
     st.session_state.results = None
 if 'query' not in st.session_state:
     st.session_state.query = ""
-# --- 상태 관리 끝 --- #
+# --- 상태 관리 끝 ---
 
 # ✅ 검색 UI
 search_option = st.radio("검색 기준 선택", ["성명", "농축협명"], horizontal=True)
