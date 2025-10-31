@@ -1,8 +1,35 @@
 import streamlit as st
 import pandas as pd
 import os
+from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
+
+
+def resolve_app_password():
+    """Try to load the app password from secrets, env vars, or fallback file."""
+    secret = st.secrets.get('password')
+    if isinstance(secret, str) and secret.strip():
+        return secret.strip()
+
+    env_password = os.getenv('STREAMLIT_APP_PASSWORD') or os.getenv('APP_PASSWORD')
+    if env_password and env_password.strip():
+        return env_password.strip()
+
+    secrets_file = Path('.streamlit/secrets.toml')
+    if secrets_file.exists():
+        try:
+            for line in secrets_file.read_text(encoding='utf-8').splitlines():
+                stripped = line.strip()
+                if stripped.startswith('password'):
+                    _, raw_value = stripped.split('=', 1)
+                    value = raw_value.strip().strip('"').strip("'")
+                    if value:
+                        return value
+        except OSError:
+            pass
+
+    return None
 
 # --- 비밀번호 기능 ---
 def check_password():
@@ -12,7 +39,13 @@ def check_password():
         password = st.text_input("🔑 비밀번호를 입력하세요", type="password")
 
         # .streamlit/secrets.toml에 설정된 비밀번호와 비교
-        if password == st.secrets["password"]:
+        expected_password = resolve_app_password()
+        if expected_password is None:
+            st.error("🔐 비밀번호 설정이 필요합니다.")
+            st.info("Streamlit Cloud에서 Secrets 편집기를 사용할 수 없다면 STREAMLIT_APP_PASSWORD/APP_PASSWORD 환경 변수를 지정하거나 .streamlit/secrets.toml 파일에 비밀번호를 직접 저장해야 합니다.")
+            return False
+
+        if password == expected_password:
             return True
         elif password: # 사용자가 무언가 입력은 했을 때
             st.error("😕 비밀번호가 틀렸습니다.")
