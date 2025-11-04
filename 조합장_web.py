@@ -2,10 +2,14 @@ import streamlit as st
 import pandas as pd
 import os
 import base64
+import json
 import altair as alt
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
+from html import escape
+import streamlit.components.v1 as components
+import openai
 
 
 def resolve_app_password():
@@ -18,18 +22,7 @@ def resolve_app_password():
     if env_password and env_password.strip():
         return env_password.strip()
 
-    secrets_file = Path('.streamlit/secrets.toml')
-    if secrets_file.exists():
-        try:
-            for line in secrets_file.read_text(encoding='utf-8').splitlines():
-                stripped = line.strip()
-                if stripped.startswith('password'):
-                    _, raw_value = stripped.split('=', 1)
-                    value = raw_value.strip().strip('"').strip("'")
-                    if value:
-                        return value
-        except OSError:
-            pass
+
 
     return None
 
@@ -95,6 +88,172 @@ def set_background(png_file):
     st.markdown(page_bg_img, unsafe_allow_html=True)
 
 set_background('background.jpg')
+
+
+def render_print_profile_component(row, info_pairs, photo_path):
+    """Render a hidden HTML block and print button for exporting profile details."""
+    name = str(row.get('성명', '') or '').strip()
+    display_name = name if name else "조합장"
+    title_text = f"{display_name}조합장 인적사항"
+    coop_name = str(row.get('농축협명', '') or '').strip()
+
+    rows_html = []
+    for label, value in info_pairs:
+        label_text = escape(str(label))
+        value_text = escape(str(value))
+        rows_html.append(f"<tr><th>{label_text}</th><td>{value_text}</td></tr>")
+    rows_markup = "".join(rows_html)
+
+    photo_html = ""
+    if photo_path and os.path.exists(photo_path):
+        try:
+            with open(photo_path, "rb") as img_file:
+                encoded_img = base64.b64encode(img_file.read()).decode()
+            photo_html = (
+                f"<div class='print-photo'><img src='data:image/jpeg;base64,{encoded_img}' "
+                f"alt='{escape(display_name)} 사진'/></div>"
+            )
+        except OSError:
+            photo_html = ""
+
+    subtitle_html = (
+        f"<p class='print-subtitle'>{escape(coop_name)}</p>" if coop_name else ""
+    )
+
+    content_html = (
+        f"<div class='print-profile'>"
+        f"<h1>{escape(title_text)}</h1>"
+        f"{subtitle_html}"
+        f"{photo_html}"
+        f"<table class='print-table'><tbody>{rows_markup}</tbody></table>"
+        f"</div>"
+    )
+
+    print_styles = """
+    <style>
+    @page {
+        size: A4 portrait;
+        margin: 15mm;
+    }
+    body {
+        font-family: 'Pretendard','Noto Sans KR','Apple SD Gothic Neo',sans-serif;
+        margin: 0;
+        padding: 0;
+        color: #111827;
+        background: #ffffff;
+    }
+    .print-profile {
+        width: 100%;
+    }
+    .print-profile h1 {
+        font-size: 24px;
+        margin: 0 0 8px 0;
+        text-align: center;
+    }
+    .print-subtitle {
+        text-align: center;
+        margin: 0 0 20px 0;
+        color: #4b5563;
+        font-size: 14px;
+    }
+    .print-photo {
+        text-align: center;
+        margin-bottom: 18px;
+    }
+    .print-photo img {
+        max-width: 120px;
+        border-radius: 8px;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+    }
+    .print-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    .print-table th,
+    .print-table td {
+        border: 1px solid #d1d5db;
+        padding: 8px 10px;
+        text-align: left;
+        vertical-align: top;
+    }
+    .print-table th {
+        width: 32%;
+        background: #f3f4f6;
+        font-weight: 600;
+    }
+    </style>
+    """
+
+    print_styles_json = json.dumps(print_styles, ensure_ascii=False)
+    title_json = json.dumps(title_text, ensure_ascii=False)
+
+    component_html = f"""
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="utf-8" />
+        <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            font-family: 'Pretendard','Noto Sans KR','Apple SD Gothic Neo',sans-serif;
+            background: transparent;
+        }}
+        .control-wrapper {{
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 6px;
+        }}
+        .print-button {{
+            background: linear-gradient(135deg, #f97316, #facc15);
+            color: #ffffff;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 6px 14px rgba(249, 115, 22, 0.25);
+        }}
+        .print-button:hover {{
+            background: linear-gradient(135deg, #fb923c, #fde047);
+        }}
+        .print-note {{
+            font-size: 12px;
+            color: #475569;
+        }}
+        </style>
+    </head>
+    <body>
+        <div class="control-wrapper">
+            <button class="print-button" onclick="printProfile()">PDF/인쇄</button>
+            <span class="print-note">A4 용지 여백(15mm)으로 맞춰 저장·출력됩니다.</span>
+        </div>
+        <div id="print-target" style="display:none;">{content_html}</div>
+        <script>
+        const PRINT_STYLES = {print_styles_json};
+        const TITLE_TEXT = {title_json};
+        function printProfile() {{
+            const target = document.getElementById('print-target');
+            if (!target) {{
+                alert('인쇄할 정보를 찾을 수 없습니다.');
+                return;
+            }}
+            const printWindow = window.open('', '_blank', 'width=780,height=960');
+            printWindow.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${{TITLE_TEXT}}</title>${{PRINT_STYLES}}</head><body>${{target.innerHTML}}</body></html>`);
+            printWindow.document.close();
+            printWindow.focus();
+            setTimeout(() => {{
+                printWindow.print();
+            }}, 400);
+        }}
+        </script>
+    </body>
+    </html>
+    """
+    components.html(component_html, height=110)
 
 
 # --- 데이터 로딩 ---
@@ -165,22 +324,27 @@ def show_search_page(df):
                         st.image(photo_path, caption=f"{row['성명']} 조합장 사진", width=180)
                     else:
                         st.info("📁 등록된 사진이 없습니다.")
-                    
+
                     info_data = []
+                    printable_pairs = []
                     for col in df.columns:
-                        if col in ['정제성명', '정제농축협명']: continue
+                        if col in ['정제성명', '정제농축협명']:
+                            continue
                         value = row[col]
-                        if col == '출생연도' and pd.notna(value):
+                        if col == '출생년도' and pd.notna(value):
                             try: value = int(float(value))
                             except (ValueError, TypeError): pass
                         if col in ['임기시작일', '임기만료일']:
                             v = pd.to_datetime(value, errors='coerce') if not pd.to_numeric(str(value).strip(), errors='coerce') else pd.to_datetime(pd.to_numeric(str(value).strip(), errors='coerce'), origin='1899-12-30', unit='D', errors='coerce')
                             if pd.notna(v): value = v.strftime('%Y-%m-%d')
                         if pd.isnull(value): value = "정보 없음"
-                        info_data.append([col, value])
-                    
-                    info_df = pd.DataFrame(info_data, columns=["항목", "내용"]).astype(str)
+                        display_value = str(value)
+                        info_data.append([col, display_value])
+                        printable_pairs.append((col, display_value))
+
+                    info_df = pd.DataFrame(info_data, columns=["항목", "내용"])
                     st.table(info_df.set_index("항목"))
+                    render_print_profile_component(row, printable_pairs, photo_path)
 
                 with tab2:
                     search_query = f"{row['농축협명']} {row['성명']}"
@@ -265,11 +429,115 @@ def show_analysis_page(df):
 
 
 # --- 사이드바 및 메인 로직 ---
+def _sanitize_api_error(msg: str) -> str:
+    """Redact any OpenAI-style API keys from error messages."""
+    return re.sub(r"sk-[A-Za-z0-9\-]+", "sk-***", msg)
+
+
+def show_chatbot_page(df):
+    """AI 챗봇을 통해 데이터에 대해 질문하는 페이지를 표시합니다."""
+    st.title("🤖 AI 챗봇에게 질문하기")
+    st.write("조합장 데이터에 대해 궁금한 점을 자유롭게 질문해보세요.")
+    st.markdown(
+        """
+        <style>
+        .chatbot-example-box {
+            background: rgba(255, 255, 255, 0.9);
+            color: #1f2937;
+            padding: 14px 18px;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+            backdrop-filter: blur(6px);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='chatbot-example-box'>예시: '서울시에 있는 조합장 목록 보여줘', '조합장 수가 가장 많은 시도는 어디야?', '가장 젊은 조합장은 누구이고 소속은 어디야?'</div>",
+        unsafe_allow_html=True,
+    )
+
+    # --- OpenAI API 키 확인 ---
+    raw_api_key = st.secrets.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+    openai_api_key = raw_api_key.strip() if isinstance(raw_api_key, str) else None
+    raw_project = (
+        st.secrets.get("openai_project")
+        or os.getenv("OPENAI_PROJECT")
+        or os.getenv("OPENAI_PROJECT_ID")
+    )
+    openai_project = raw_project.strip() if isinstance(raw_project, str) else None
+    if not openai_api_key:
+        st.error("⚠️ OpenAI API 키가 설정되지 않았습니다.")
+        st.info("`.streamlit/secrets.toml` 파일에 `openai_api_key = \"YOUR_API_KEY\"` 형식으로 API 키를 추가하거나, `OPENAI_API_KEY` 환경 변수를 설정해주세요.")
+        st.stop()
+
+    # --- LangChain 에이전트 초기화 ---
+    from langchain_community.chat_models import ChatOpenAI
+    from langchain.agents.agent_types import AgentType
+    from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
+
+    default_headers = {"OpenAI-Project": openai_project} if openai_project else None
+
+    llm = ChatOpenAI(
+        temperature=0,
+        model="gpt-4",
+        openai_api_key=openai_api_key,
+        streaming=True,
+        default_headers=default_headers,
+    )
+    
+    # '정제'된 컬럼은 사용자에게 혼동을 줄 수 있으므로 제외하고 원본 컬럼만 사용
+    agent_df = df.drop(columns=['정제성명', '정제농축협명'])
+    
+    agent = create_pandas_dataframe_agent(
+        llm,
+        agent_df,
+        verbose=True,
+        agent_type=AgentType.OPENAI_FUNCTIONS,
+        handle_parsing_errors=True,
+        allow_dangerous_code=True, # PandasAgent requires this
+        agent_executor_kwargs={"handle_parsing_errors": True},
+        prompt_suffix="모든 답변은 한국어로 해주세요."
+    )
+
+    # --- 채팅 UI ---
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    if prompt := st.chat_input("질문을 입력하세요..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("AI가 답변을 생성 중입니다..."):
+                try:
+                    response = agent.invoke(prompt)
+                    st.markdown(response["output"])
+                    st.session_state.messages.append({"role": "assistant", "content": response["output"]})
+                except openai.AuthenticationError:
+                    st.error("❌ OpenAI API 키가 올바르지 않거나 비활성화되었습니다. 키의 유효성을 다시 확인해주세요.")
+                except Exception as e:
+                    st.error(f"답변 생성 중 오류가 발생했습니다: {e}")
+
+
+# --- 사이드바 및 메인 로직 ---
 st.sidebar.title("메뉴")
-menu = st.sidebar.radio("원하는 작업을 선택하세요", ("조합장 정보 검색", "통계 자료"))
+menu_options = ("조합장 정보 검색", "통계 자료", "🤖 AI 챗봇")
+menu = st.sidebar.radio("원하는 작업을 선택하세요", menu_options)
 
 if menu == "조합장 정보 검색":
     show_search_page(df)
 elif menu == "통계 자료":
     show_analysis_page(df)
+elif menu == "🤖 AI 챗봇":
+    show_chatbot_page(df)
 
