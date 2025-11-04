@@ -356,6 +356,10 @@ def render_print_profile_component(row, info_pairs, photo_path):
 
 def resolve_openai_api_key():
     """Return the first available OpenAI API key from secrets, env vars, or fallback file."""
+    runtime_key = st.session_state.get("runtime_openai_api_key")
+    if isinstance(runtime_key, str) and runtime_key.strip():
+        return runtime_key.strip()
+
     candidates = [
         st.secrets.get("openai_api_key"),
         st.secrets.get("OPENAI_API_KEY"),
@@ -653,9 +657,22 @@ def show_chatbot_page(df):
     api_key = resolve_openai_api_key()
     if not api_key:
         st.error("OpenAI API 키가 설정되지 않았습니다.")
+        with st.expander("여기에 OpenAI API 키를 입력하세요", expanded=True):
+            entered_key = st.text_input(
+                "OpenAI API 키",
+                type="password",
+                placeholder="sk-...",
+            )
+            if st.button("임시로 사용하기", use_container_width=True):
+                if entered_key and entered_key.strip():
+                    st.session_state["runtime_openai_api_key"] = entered_key.strip()
+                    st.success("API 키가 임시로 저장되었습니다. 질문을 다시 입력해 주세요.")
+                    st.experimental_rerun()
+                else:
+                    st.warning("유효한 API 키를 입력해 주세요.")
         st.info(
-            "`.streamlit/secrets.toml`에 `openai_api_key = \"새로운 키\"` 형태로 저장하거나 "
-            "`OPENAI_API_KEY` 환경 변수를 설정한 뒤 다시 실행해 주세요."
+            "이 입력은 현재 브라우저 세션에서만 사용됩니다. "
+            "영구적으로 저장하려면 `.streamlit/secrets.toml` 또는 `OPENAI_API_KEY` 환경 변수를 설정해 주세요."
         )
         return
 
