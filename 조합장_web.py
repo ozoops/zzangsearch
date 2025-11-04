@@ -476,7 +476,7 @@ def show_chatbot_page(df):
         st.stop()
 
     # --- LangChain 에이전트 초기화 ---
-    from langchain_community.chat_models import ChatOpenAI
+    from langchain_openai import ChatOpenAI
     from langchain.agents.agent_types import AgentType
     from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 
