@@ -6,4 +6,4 @@ langchain-community==0.3.31
 langchain-experimental==0.3.5rc1
 tabulate
 openai
-langchain-openai
+langchain-openaiduckduckgo-search

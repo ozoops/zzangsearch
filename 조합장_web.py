@@ -10,6 +10,7 @@ from datetime import datetime
 from urllib.parse import quote
 from html import escape
 import streamlit.components.v1 as components
+from duckduckgo_search import DDGS
 
 try:
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -428,6 +429,58 @@ def render_dataframe_export_options(*args, **kwargs):
     return
 
 
+def fetch_duckduckgo_results(query: str, max_results: int = 5):
+    """Return lightweight DuckDuckGo search results for the given query."""
+    stripped = (query or "").strip()
+    if not stripped:
+        return []
+
+    results = []
+    try:
+        with DDGS() as ddgs:
+            for hit in ddgs.text(
+                stripped,
+                max_results=max_results,
+                region="kr-kr",
+                safesearch="moderate",
+            ):
+                title = hit.get("title") or hit.get("heading") or ""
+                summary = hit.get("body") or hit.get("snippet") or ""
+                url = hit.get("href") or hit.get("url") or ""
+                if not (title and url):
+                    continue
+                results.append(
+                    {
+                        "title": title.strip(),
+                        "summary": (summary or "").strip(),
+                        "url": url.strip(),
+                    }
+                )
+                if len(results) >= max_results:
+                    break
+    except Exception:
+        return []
+    return results
+
+
+def format_search_results_for_prompt(results):
+    """Create a concise text block from search results for LLM context."""
+    if not results:
+        return ""
+
+    lines = []
+    for idx, item in enumerate(results, 1):
+        title = item.get("title", "")
+        url = item.get("url", "")
+        summary = item.get("summary", "")
+        if summary and len(summary) > 180:
+            summary = summary[:177] + "..."
+        lines.append(f"{idx}. {title} - {url}")
+        if summary:
+            lines.append(f"   요약: {summary}")
+    return "\n".join(lines)
+
+
 def _format_field_value(value):
     """Format values for compact prompt injection."""
     if value is None:
@@ -758,6 +811,13 @@ def show_chatbot_page(df):
                     )
                 else:
                     st.write("표시할 참고 데이터가 없습니다.")
+
+        search_results = fetch_duckduckgo_results(user_prompt, max_results=5)
+        if search_results:
+            with st.expander("외부 검색 결과 (DuckDuckGo)", expanded=False):
+                for item in search_results:
+                    summary = item.get("summary") or "요약 정보가 없습니다."
+                    st.markdown(f"- [{item['title']}]({item['url']})\n  {summary}")
         return
 
     with st.spinner("AI가 자료를 확인하고 있습니다..."):
@@ -774,6 +834,11 @@ def show_chatbot_page(df):
 
         reference_records = build_reference_records(user_prompt, df)
         context_block = format_records_for_prompt(reference_records)
+        search_results = []
+        search_needed = not reference_records or bool(re.search(r"(뉴스|기사|보도|소식|동향|최근|최신)", user_prompt))
+        if search_needed:
+            search_results = fetch_duckduckgo_results(user_prompt, max_results=5)
+        search_context_block = format_search_results_for_prompt(search_results)
 
         messages = [SystemMessage(content=compose_system_prompt())]
         for past in st.session_state.ai_chat_messages[:-1]:
@@ -787,6 +852,11 @@ def show_chatbot_page(df):
             latest_user_content = (
                 f"{user_prompt}\n\n[참고 데이터]\n{context_block}\n\n"
                 "위 정보를 우선 활용해서 답변해 주세요."
+            )
+        if search_context_block:
+            latest_user_content = (
+                f"{latest_user_content}\n\n[외부 검색 결과]\n{search_context_block}\n\n"
+                "필요하다면 위의 외부 검색 결과를 참고해 주세요."
             )
         messages.append(HumanMessage(content=latest_user_content))
 
@@ -826,6 +896,12 @@ def show_chatbot_page(df):
                 )
             else:
                 st.write("표시할 참고 데이터가 없습니다.")
+
+    if search_results:
+        with st.expander("외부 검색 결과 (DuckDuckGo)", expanded=False):
+            for item in search_results:
+                summary = item.get("summary") or "요약 정보가 없습니다."
+                st.markdown(f"- [{item['title']}]({item['url']})\n  {summary}")
 
 
 # --- 데이터 로딩 ---
