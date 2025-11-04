@@ -22,7 +22,18 @@ def resolve_app_password():
     if env_password and env_password.strip():
         return env_password.strip()
 
-
+    secrets_file = Path('.streamlit/secrets.toml')
+    if secrets_file.exists():
+        try:
+            for line in secrets_file.read_text(encoding='utf-8').splitlines():
+                stripped = line.strip()
+                if stripped.startswith('password'):
+                    _, raw_value = stripped.split('=', 1)
+                    value = raw_value.strip().strip('"').strip("'")
+                    if value:
+                        return value
+        except OSError:
+            pass
 
     return None
 
