@@ -153,12 +153,21 @@ def apply_theme(mode: str):
         </style>
         """
     else:
-        set_background("background.jpg", overlay="rgba(255, 255, 255, 0.78)")
+        set_background("background.jpg", overlay="rgba(255, 255, 255, 0.95)")
         css = """
         <style>
         :root { color-scheme: light; }
         .stApp {
             color: #1f2937 !important;
+            background-color: #f8fafc !important;
+        }
+        div[data-testid="stAppViewBlockContainer"],
+        .st-emotion-cache-1wrcr25 {
+            background-color: rgba(248, 250, 252, 0.96) !important;
+        }
+        div[data-testid="stDecoration"],
+        div[data-testid="stStatusWidget"] {
+            background-color: transparent !important;
         }
         .stApp * {
             color: #1f2937 !important;
@@ -185,6 +194,9 @@ def apply_theme(mode: str):
         }
         .stTabs [role="tablist"] button[aria-selected="true"] {
             border-bottom: 2px solid #2563eb;
+        }
+        h1, h2, h3, h4, h5, h6, label, p, span {
+            text-shadow: 0 0 1px rgba(255, 255, 255, 0.6);
         }
         </style>
         """
