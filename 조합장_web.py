@@ -627,9 +627,7 @@ def generate_structured_answer(question, df):
     return None, []
 
 
-DEFAULT_THEME = (st.secrets.get("default_theme") or "light").lower()
-if DEFAULT_THEME not in {"light", "dark"}:
-    DEFAULT_THEME = "light"
+DEFAULT_THEME = "light"
 
 if "ui_theme" not in st.session_state:
     st.session_state.ui_theme = DEFAULT_THEME
