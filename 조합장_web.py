@@ -88,12 +88,12 @@ def get_base64(bin_file):
         data = f.read()
     return base64.b64encode(data).decode()
 
-def set_background(png_file):
+def set_background(png_file, overlay="rgba(0, 0, 0, 0.45)"):
     bin_str = get_base64(png_file)
     page_bg_img = f"""
     <style>
     .stApp {{
-        background: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)),
+        background: linear-gradient({overlay}, {overlay}),
                     url("data:image/jpeg;base64,{bin_str}");
         background-size: cover;
         background-position: center;
@@ -106,7 +106,84 @@ def set_background(png_file):
     """
     st.markdown(page_bg_img, unsafe_allow_html=True)
 
-set_background('background.jpg')
+
+def apply_theme(mode: str):
+    """Apply light or dark theme tweaks for better readability."""
+    normalized = (mode or "").lower()
+    if normalized not in {"dark", "light"}:
+        normalized = "light"
+
+    if normalized == "dark":
+        set_background("background.jpg", overlay="rgba(12, 20, 31, 0.72)")
+        css = """
+        <style>
+        :root { color-scheme: dark; }
+        .stApp, .stApp * {
+            color: #e2e8f0;
+        }
+        div[data-testid="stSidebar"] {
+            background: rgba(15, 23, 42, 0.82);
+        }
+        div[data-testid="stSidebar"] * {
+            color: #e2e8f0 !important;
+        }
+        .stTextInput input, .stSelectbox div[data-baseweb="select"] > div,
+        .stNumberInput input, .stDateInput input, textarea {
+            background: rgba(15, 23, 42, 0.55);
+            color: #e2e8f0 !important;
+            border-color: #334155 !important;
+        }
+        .stButton button, .stDownloadButton button {
+            background: rgba(30, 64, 175, 0.65);
+            color: #f8fafc !important;
+            border: 1px solid #475569;
+        }
+        .stTabs [role="tablist"] button {
+            color: #e2e8f0;
+        }
+        .stTabs [role="tablist"] button[aria-selected="true"] {
+            border-bottom: 2px solid #60a5fa;
+        }
+        .stMetric label, .stMetric span {
+            color: #f8fafc !important;
+        }
+        </style>
+        """
+    else:
+        set_background("background.jpg", overlay="rgba(255, 255, 255, 0.78)")
+        css = """
+        <style>
+        :root { color-scheme: light; }
+        .stApp, .stApp * {
+            color: #1f2937;
+        }
+        div[data-testid="stSidebar"] {
+            background: rgba(255, 255, 255, 0.9);
+        }
+        div[data-testid="stSidebar"] * {
+            color: #1f2937 !important;
+        }
+        .stTextInput input, .stSelectbox div[data-baseweb="select"] > div,
+        .stNumberInput input, .stDateInput input, textarea {
+            background: rgba(255, 255, 255, 0.92);
+            color: #1f2937 !important;
+            border-color: #d1d5db !important;
+        }
+        .stButton button, .stDownloadButton button {
+            background: rgba(59, 130, 246, 0.12);
+            color: #1f2937 !important;
+            border: 1px solid #93c5fd;
+        }
+        .stTabs [role="tablist"] button {
+            color: #1f2937;
+        }
+        .stTabs [role="tablist"] button[aria-selected="true"] {
+            border-bottom: 2px solid #2563eb;
+        }
+        </style>
+        """
+
+    st.markdown(css, unsafe_allow_html=True)
 
 
 def render_print_profile_component(row, info_pairs, photo_path):
@@ -544,6 +621,28 @@ def generate_structured_answer(question, df):
         return "자료에 출생연도가 정리되어 있지 않아 최연장 조합장을 특정하기 어렵습니다.", []
 
     return None, []
+
+
+DEFAULT_THEME = (st.secrets.get("default_theme") or "light").lower()
+if DEFAULT_THEME not in {"light", "dark"}:
+    DEFAULT_THEME = "light"
+
+if "ui_theme" not in st.session_state:
+    st.session_state.ui_theme = DEFAULT_THEME
+
+with st.sidebar:
+    st.sidebar.markdown("### 🎨 화면 모드")
+    theme_choice = st.radio(
+        "배경 모드",
+        ("밝은 모드", "어두운 모드"),
+        index=0 if st.session_state.ui_theme == "light" else 1,
+        label_visibility="collapsed",
+        key="theme_selector",
+    )
+    st.sidebar.divider()
+
+st.session_state.ui_theme = "dark" if theme_choice == "어두운 모드" else "light"
+apply_theme(st.session_state.ui_theme)
 
 
 def show_chatbot_page(df):
