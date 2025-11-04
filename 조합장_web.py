@@ -4,11 +4,19 @@ import os
 import base64
 import json
 import altair as alt
+import re
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
 from html import escape
 import streamlit.components.v1 as components
+
+try:
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    ChatOpenAI = None
+    AIMessage = HumanMessage = SystemMessage = None
 
 
 
@@ -267,6 +275,427 @@ def render_print_profile_component(row, info_pairs, photo_path):
     components.html(component_html, height=110)
 
 
+# --- AI 챗봇 유틸리티 ---
+
+def resolve_openai_api_key():
+    """Return the first available OpenAI API key from secrets, env vars, or fallback file."""
+    candidates = [
+        st.secrets.get("openai_api_key"),
+        st.secrets.get("OPENAI_API_KEY"),
+        st.secrets.get("api_key"),
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("OPENAI_APIKEY"),
+        os.getenv("OPENAI_KEY"),
+    ]
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    secrets_file = Path(".streamlit/secrets.toml")
+    if secrets_file.exists():
+        try:
+            for line in secrets_file.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("openai_api_key"):
+                    _, raw_value = stripped.split("=", 1)
+                    value = raw_value.strip().strip('"').strip("'")
+                    if value:
+                        return value
+        except OSError:
+            pass
+
+    return None
+
+
+def _normalize_token(text: str) -> str:
+    """Normalize tokens for fuzzy matching."""
+    return re.sub(r"[\s\-\_/]", "", str(text or "")).lower()
+
+
+def _next_export_key(prefix: str) -> str:
+    """Return a unique key for export toolbars."""
+    counter = st.session_state.get("_export_toolbar_counter", 0)
+    st.session_state["_export_toolbar_counter"] = counter + 1
+    return f"{prefix}-{counter}"
+
+
+def render_export_toolbar(*args, **kwargs):
+    """Export controls disabled per user request."""
+    return
+
+
+def render_dataframe_export_options(*args, **kwargs):
+    """Export controls disabled per user request."""
+    return
+
+
+def _format_field_value(value):
+    """Format values for compact prompt injection."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if pd.isna(value):
+            return None
+        if float(value).is_integer():
+            return str(int(value))
+        return str(round(float(value), 2))
+    if pd.isna(value):
+        return None
+    return str(value)
+
+
+def build_reference_records(question, df, max_matches=3):
+    """Return up to `max_matches` rows from df that look relevant to the question."""
+    if not question:
+        return []
+
+    normalized_question = _normalize_token(question)
+    if not normalized_question:
+        return []
+
+    dataframes = []
+    name_norm_col = "정제성명"
+    coop_norm_col = "정제농축협명"
+
+    if name_norm_col in df.columns:
+        mask = df[name_norm_col].astype(str).str.contains(normalized_question, case=False, na=False)
+        if mask.any():
+            dataframes.append(df[mask])
+
+    if coop_norm_col in df.columns:
+        mask = df[coop_norm_col].astype(str).str.contains(normalized_question, case=False, na=False)
+        if mask.any():
+            dataframes.append(df[mask])
+
+    combined = pd.concat(dataframes, axis=0).drop_duplicates() if dataframes else pd.DataFrame()
+
+    if combined.empty:
+        tokens = [token for token in re.findall(r"[가-힣A-Za-z0-9]+", question) if len(token) >= 2]
+        token_matches = []
+        for token in tokens:
+            token_mask = pd.Series(False, index=df.index)
+            for col in ("성명", "농축협명", "주요경력", "상임구분", "선수", "부가의결권"):
+                if col in df.columns:
+                    token_mask |= df[col].astype(str).str.contains(token, case=False, na=False)
+            if token_mask.any():
+                token_matches.append(df[token_mask])
+        if token_matches:
+            combined = pd.concat(token_matches, axis=0).drop_duplicates()
+
+    if combined.empty:
+        return []
+
+    return combined.head(max_matches).to_dict(orient="records")
+
+
+def format_records_for_prompt(records):
+    """Convert retrieved records into a compact plaintext block for LLM context."""
+    if not records:
+        return ""
+
+    field_order = [
+        "성명", "농축협명", "유형", "상임구분",
+        "주요경력", "연락처", "임기시작일", "임기만료일",
+        "선수", "부가의결권", "비고",
+    ]
+
+    field_labels = {
+        "성명": "성명",
+        "농축협명": "소속 조합",
+        "유형": "유형",
+        "상임구분": "상임 구분",
+        "주요경력": "주요 경력",
+        "연락처": "연락처",
+        "임기시작일": "임기 시작일",
+        "임기만료일": "임기 만료일",
+        "선수": "선수",
+        "부가의결권": "부가 의결권",
+        "비고": "비고",
+    }
+
+    formatted_rows = []
+    for record in records:
+        parts = []
+        for field in field_order:
+            if field in record:
+                value = _format_field_value(record[field])
+                if value:
+                    parts.append(f"{field_labels.get(field, field)}: {value}")
+        if parts:
+            formatted_rows.append("\n".join(parts))
+
+    return "\n\n".join(formatted_rows)
+
+
+def compose_system_prompt():
+    """Return the default system prompt for the AI chatbot."""
+    return (
+        "당신은 대한민국 농업·농촌·농협(농협중앙회 포함)과 관련한 전문 상담원입니다. "
+        "우선 제공된 조합장 데이터에서 답을 찾되, 해당 정보가 없으면 당신이 알고 있는 "
+        "한국의 농협 제도, 농업 정책, 농촌 현황 등에 대한 일반 지식을 활용해 설명하세요. "
+        "일반 지식을 사용할 때에는 '일반 정보'임을 밝혀 주고, 추측은 피하며 사실 기반으로 "
+        "간결하게 설명합니다. 개인정보와 민감정보는 노출하지 마세요."
+    )
+
+
+def generate_structured_answer(question, df):
+    """Return a deterministic answer for recognizable queries plus related records."""
+    normalized = _normalize_token(question)
+    lowered = question.lower()
+
+    # 부가의결권 관련 질의 처리
+    if "부가의결권" in normalized or "추가의결권" in normalized:
+        column = "부가의결권"
+        if column in df.columns:
+            value_series = df[column].astype(str).str.strip()
+            has_rights = (
+                df[column].notna()
+                & (value_series != "")
+                & ~value_series.str.contains("없", na=False)
+            )
+            subset = df.loc[has_rights].copy()
+            if subset.empty:
+                return "현재 자료에서 부가의결권이 기재된 조합은 확인되지 않습니다.", []
+
+            grouped = (
+                subset.groupby("농축협명")
+                .agg(
+                    조합장수=("성명", "count"),
+                    조합장목록=(
+                        "성명",
+                        lambda values: ", ".join(
+                            sorted(
+                                {str(value).strip() for value in values if str(value).strip()}
+                            )
+                        ),
+                    ),
+                )
+                .reset_index()
+            )
+
+            bullet_lines = [
+                f"- {row['농축협명']}: {row['조합장수']}명 ({row['조합장목록']})"
+                for _, row in grouped.iterrows()
+            ]
+            summary = (
+                f"부가의결권이 기재된 조합은 총 {len(grouped)}곳이며, 조합장 {subset.shape[0]}명이 있습니다.\n"
+                "자세한 목록은 다음과 같습니다:\n"
+                + "\n".join(bullet_lines)
+            )
+
+            record_columns = [
+                col
+                for col in ["성명", "농축협명", "부가의결권", "임기시작일", "임기만료일"]
+                if col in subset.columns
+            ]
+            return summary, subset[record_columns].to_dict(orient="records")
+
+    # 최연장자 / 나이에 대한 질문 처리
+    age_keywords = ("최연장", "가장나이가", "나이가가장", "최고령", "연장자")
+    if any(keyword in normalized for keyword in age_keywords) or "나이가 많은" in lowered:
+        year_column = "출생연도"
+        if year_column in df.columns:
+            numeric_birth = pd.to_numeric(df[year_column], errors="coerce")
+            valid_all = df.loc[~numeric_birth.isna()].copy()
+            if valid_all.empty:
+                return "자료에 출생연도가 기재된 행이 없어 최연장 조합장을 파악하기 어렵습니다.", []
+
+            valid_all["__birth_year"] = numeric_birth.loc[valid_all.index].astype(int)
+            current_year = datetime.now().year
+            valid = valid_all[
+                (valid_all["__birth_year"] >= 1900) & (valid_all["__birth_year"] <= current_year)
+            ]
+            if not valid.empty:
+                oldest_year = int(valid["__birth_year"].min())
+                oldest = valid[valid["__birth_year"] == oldest_year]
+                approx_age = current_year - oldest_year
+
+                names = ", ".join(oldest["성명"].astype(str))
+                unions = ", ".join(oldest["농축협명"].astype(str))
+
+                answer = (
+                    f"데이터상 가장 나이가 많은 조합장은 {oldest_year}년생인 {names} (소속: {unions})입니다."
+                )
+                if approx_age > 0:
+                    answer += f" {current_year}년 기준으로 만 {approx_age}세 정도로 추정됩니다."
+
+                record_columns = [
+                    col
+                    for col in [
+                        "성명",
+                        "농축협명",
+                        "출생연도",
+                        "상임구분",
+                        "임기시작일",
+                        "임기만료일",
+                        "주요경력",
+                    ]
+                    if col in oldest.columns
+                ]
+                return answer, oldest[record_columns].to_dict(orient="records")
+
+            return "출생연도가 확인 가능한 범위를 벗어나 최연장 조합장을 계산하기 어렵습니다.", []
+
+        return "자료에 출생연도가 정리되어 있지 않아 최연장 조합장을 특정하기 어렵습니다.", []
+
+    return None, []
+
+
+def show_chatbot_page(df):
+    """Render the AI chatbot interface."""
+    st.title("AI 챗봇 상담")
+    st.caption("조합장 데이터 기반으로 간단한 질문에 답변하거나 비교 정보를 알려드립니다.")
+
+    api_key = resolve_openai_api_key()
+    if not api_key:
+        st.error("OpenAI API 키가 설정되지 않았습니다.")
+        st.info(
+            "`.streamlit/secrets.toml`에 `openai_api_key = \"새로운 키\"` 형태로 저장하거나 "
+            "`OPENAI_API_KEY` 환경 변수를 설정한 뒤 다시 실행해 주세요."
+        )
+        return
+
+    if ChatOpenAI is None or AIMessage is None:
+        st.error("필요한 LangChain/OpenAI 모듈을 찾을 수 없습니다.")
+        st.info("가상환경에서 `pip install -r requirements.txt`를 실행해 패키지를 설치해 주세요.")
+        return
+
+    if "ai_chat_messages" not in st.session_state:
+        st.session_state.ai_chat_messages = [
+            {"role": "assistant", "content": "안녕하세요! 조합장 정보에 대해 무엇이든 물어보세요."}
+        ]
+
+    model_name = st.secrets.get("openai_model") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+
+    for message in st.session_state.ai_chat_messages:
+        role = "assistant" if message["role"] == "assistant" else "user"
+        with st.chat_message(role):
+            st.markdown(message["content"])
+
+    user_prompt = st.chat_input("질문을 입력해 주세요.")
+    if not user_prompt:
+        return
+
+    st.session_state.ai_chat_messages.append({"role": "user", "content": user_prompt})
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
+
+    structured_answer, structured_records = generate_structured_answer(user_prompt, df)
+    if structured_answer:
+        st.session_state.ai_chat_messages.append({"role": "assistant", "content": structured_answer})
+        with st.chat_message("assistant"):
+            st.markdown(structured_answer)
+            render_export_toolbar(
+                structured_answer,
+                prefix="chatbot-structured-text",
+                file_name="chatbot_response.txt",
+                copy_label="📋 답변 복사",
+                print_label="🖨️ 답변 인쇄",
+                save_label="💾 TXT 저장",
+                heading="AI 답변 내보내기",
+            )
+
+        if structured_records:
+            with st.expander("참고로 사용된 데이터 보기", expanded=False):
+                display_records = pd.DataFrame(structured_records)
+                if not display_records.empty:
+                    show_columns = [
+                        col
+                        for col in [
+                            "성명",
+                            "농축협명",
+                            "부가의결권",
+                            "출생연도",
+                            "상임구분",
+                            "임기시작일",
+                            "임기만료일",
+                            "주요경력",
+                        ]
+                        if col in display_records.columns
+                    ]
+                    st.dataframe(display_records[show_columns] if show_columns else display_records)
+                    render_dataframe_export_options(
+                        display_records[show_columns] if show_columns else display_records,
+                        "chatbot_reference",
+                        heading="참고 데이터 내보내기",
+                    )
+                else:
+                    st.write("표시할 참고 데이터가 없습니다.")
+        return
+
+    with st.spinner("AI가 자료를 확인하고 있습니다..."):
+        try:
+            model = ChatOpenAI(
+                api_key=api_key,
+                model=model_name,
+                temperature=0.2,
+                max_tokens=600,
+            )
+        except Exception as exc:
+            st.error(f"모델을 초기화하는 중 오류가 발생했습니다: {exc}")
+            return
+
+        reference_records = build_reference_records(user_prompt, df)
+        context_block = format_records_for_prompt(reference_records)
+
+        messages = [SystemMessage(content=compose_system_prompt())]
+        for past in st.session_state.ai_chat_messages[:-1]:
+            if past["role"] == "user":
+                messages.append(HumanMessage(content=past["content"]))
+            else:
+                messages.append(AIMessage(content=past["content"]))
+
+        latest_user_content = user_prompt
+        if context_block:
+            latest_user_content = (
+                f"{user_prompt}\n\n[참고 데이터]\n{context_block}\n\n"
+                "위 정보를 우선 활용해서 답변해 주세요."
+            )
+        messages.append(HumanMessage(content=latest_user_content))
+
+        try:
+            response = model.invoke(messages)
+            assistant_reply = response.content if hasattr(response, "content") else str(response)
+        except Exception as exc:
+            st.error(f"AI 응답 생성 중 오류가 발생했습니다: {exc}")
+            return
+
+    st.session_state.ai_chat_messages.append({"role": "assistant", "content": assistant_reply})
+    with st.chat_message("assistant"):
+        st.markdown(assistant_reply)
+        render_export_toolbar(
+            assistant_reply,
+            prefix="chatbot-ai-text",
+            file_name="chatbot_response.txt",
+            copy_label="📋 답변 복사",
+            print_label="🖨️ 답변 인쇄",
+            save_label="💾 TXT 저장",
+            heading="AI 답변 내보내기",
+        )
+
+    if context_block:
+        with st.expander("참고로 사용된 데이터 보기", expanded=False):
+            display_records = pd.DataFrame(reference_records)
+            if not display_records.empty:
+                show_columns = [col for col in [
+                    "성명", "농축협명", "유형", "주요경력", "연락처",
+                    "임기시작일", "임기만료일", "상임구분", "선수", "부가의결권", "비고"
+                ] if col in display_records.columns]
+                st.dataframe(display_records[show_columns])
+                render_dataframe_export_options(
+                    display_records[show_columns],
+                    "chatbot_reference",
+                    heading="참고 데이터 내보내기",
+                )
+            else:
+                st.write("표시할 참고 데이터가 없습니다.")
+
+
 # --- 데이터 로딩 ---
 EXCEL_FILENAME = "조합장 현황.xlsx"
 
@@ -436,7 +865,35 @@ def show_analysis_page(df):
         with col2:
             st.write("**데이터 표**")
             display_cols = [selected_column, "count", "percentage"]
-            st.dataframe(chart_data[display_cols].rename(columns={"count": "건수", "percentage": "비율(%)"}))
+            display_df = chart_data[display_cols].rename(columns={"count": "건수", "percentage": "비율(%)"})
+            st.dataframe(display_df)
+
+        export_prefix = _normalize_token(selected_column) or "column"
+        summary_lines = [f"[{selected_column}] 분포 (상위 {len(chart_data)}건)"]
+        for _, row in chart_data.iterrows():
+            count_value = row.get("count", 0)
+            try:
+                count_display = int(count_value)
+            except (TypeError, ValueError):
+                count_display = count_value
+            percentage_value = row.get("percentage", 0)
+            try:
+                percentage_display = f"{float(percentage_value):.2f}"
+            except (TypeError, ValueError):
+                percentage_display = str(percentage_value)
+            summary_lines.append(f"- {row.get(selected_column, '미기재')}: {count_display}건 ({percentage_display}%)")
+
+        summary_text = "\n".join(summary_lines)
+        render_export_toolbar(
+            summary_text,
+            prefix=f"analysis-summary-{export_prefix}",
+            file_name=f"{export_prefix}_summary.txt",
+            copy_label="📋 요약 복사",
+            print_label="🖨️ 요약 인쇄",
+            save_label="💾 TXT 저장",
+            heading="요약 내보내기",
+        )
+        render_dataframe_export_options(display_df, f"{export_prefix}_analysis")
 
 
 # --- 사이드바 및 메인 로직 ---
@@ -445,12 +902,14 @@ def show_analysis_page(df):
 
 # --- 사이드바 및 메인 로직 ---
 st.sidebar.title("메뉴")
-menu_options = ("조합장 정보 검색", "통계 자료")
+menu_options = ("조합장 정보 검색", "통계 자료", "AI 챗봇")
 menu = st.sidebar.radio("원하는 작업을 선택하세요", menu_options)
 
 if menu == "조합장 정보 검색":
     show_search_page(df)
 elif menu == "통계 자료":
     show_analysis_page(df)
+else:
+    show_chatbot_page(df)
 
 
