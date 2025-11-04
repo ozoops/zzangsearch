@@ -474,6 +474,20 @@ def show_chatbot_page(df):
 
     # --- OpenAI API 키 확인 ---
     raw_api_key = st.secrets.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+    if not raw_api_key:
+        secrets_file = Path('.streamlit/secrets.toml')
+        if secrets_file.exists():
+            try:
+                for line in secrets_file.read_text(encoding='utf-8').splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith('openai_api_key'):
+                        _, raw_value = stripped.split('=', 1)
+                        value = raw_value.strip().strip('"').strip("'")
+                        if value:
+                            raw_api_key = value
+                            break
+            except OSError:
+                pass
     openai_api_key = raw_api_key.strip() if isinstance(raw_api_key, str) else None
     raw_project = (
         st.secrets.get("openai_project")
