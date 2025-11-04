@@ -118,8 +118,11 @@ def apply_theme(mode: str):
         css = """
         <style>
         :root { color-scheme: dark; }
-        .stApp, .stApp * {
-            color: #e2e8f0;
+        .stApp {
+            color: #e2e8f0 !important;
+        }
+        .stApp * {
+            color: #e2e8f0 !important;
         }
         div[data-testid="stSidebar"] {
             background: rgba(15, 23, 42, 0.82);
@@ -154,8 +157,11 @@ def apply_theme(mode: str):
         css = """
         <style>
         :root { color-scheme: light; }
-        .stApp, .stApp * {
-            color: #1f2937;
+        .stApp {
+            color: #1f2937 !important;
+        }
+        .stApp * {
+            color: #1f2937 !important;
         }
         div[data-testid="stSidebar"] {
             background: rgba(255, 255, 255, 0.9);
