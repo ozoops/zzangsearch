@@ -3,9 +3,11 @@ import pandas as pd
 import os
 import base64
 import json
+import io
 import altair as alt
 import gspread
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
@@ -13,6 +15,8 @@ from html import escape
 import streamlit.components.v1 as components
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 
 
 
@@ -37,6 +41,51 @@ def resolve_app_password():
                     if value:
                         return value
         except OSError:
+            pass
+
+    return None
+
+
+def as_plain_dict(value):
+    """Best-effort convert Streamlit config sections to plain dicts."""
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def load_service_account_info():
+    """Load Google service-account credentials from secrets, env vars, or local file."""
+    secrets_info = st.secrets.get("gdrive_service_account")
+    if isinstance(secrets_info, dict) and secrets_info.get("private_key"):
+        return secrets_info
+
+    raw_json = st.secrets.get("gdrive_service_account_json")
+    if isinstance(raw_json, str) and raw_json.strip():
+        try:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            pass
+
+    path_hint = st.secrets.get("gdrive_service_account_file")
+    candidate_paths = []
+    if isinstance(path_hint, str) and path_hint.strip():
+        candidate_paths.append(Path(path_hint.strip()))
+    candidate_paths.append(Path(".streamlit/gdrive_service_account.json"))
+
+    for candidate in candidate_paths:
+        try:
+            if candidate.exists():
+                return json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+    env_json = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
+    if env_json:
+        try:
+            return json.loads(env_json)
+        except json.JSONDecodeError:
             pass
 
     return None
@@ -412,13 +461,51 @@ def format_date_value(value):
 
     return raw
 
+
+def download_excel_from_drive(creds_info, file_id: str, worksheet: str | int | None = None):
+    """Download an Excel or Google Sheet file from Drive and return a DataFrame."""
+    if not creds_info or not file_id:
+        return None
+
+    scopes = ["https://www.googleapis.com/auth/drive.readonly"]
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            creds_info,
+            scopes=scopes,
+        )
+        service = build("drive", "v3", credentials=creds)
+        metadata = service.files().get(fileId=file_id, fields="mimeType,name").execute()
+        mime_type = metadata.get("mimeType", "")
+        if mime_type == "application/vnd.google-apps.spreadsheet":
+            request = service.files().export_media(
+                fileId=file_id,
+                mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            request = service.files().get_media(fileId=file_id)
+
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        buffer.seek(0)
+
+        read_kwargs = {"engine": "openpyxl"}
+        if worksheet is not None:
+            read_kwargs["sheet_name"] = worksheet
+        return pd.read_excel(buffer, **read_kwargs)
+    except (HttpError, OSError, ValueError):
+        return None
+
+
 FOLDER_ID = "1F66ImTp4VxdPW2W-5jrGoJW1x72Y43Zy"
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def list_drive_photos(folder_id: str = FOLDER_ID):
     """Fetch photo metadata from Google Drive folder."""
-    creds_info = st.secrets.get("gdrive_service_account")
+    creds_info = load_service_account_info()
     if not creds_info:
         return []
 
@@ -447,7 +534,7 @@ def list_drive_photos(folder_id: str = FOLDER_ID):
     return results
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def build_photo_lookup():
     """Return mapping from photo key (file stem) to URL."""
     lookup = {}
@@ -479,15 +566,18 @@ apply_theme(st.session_state.ui_theme)
 # --- 데이터 로딩 ---
 EXCEL_FILENAME = "조합장 현황.xlsx"
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def load_data():
-    sheet_cfg = st.secrets.get('gsheets', {})
+    logs = []
+    logs.append("데이터 로딩 시작")
+    sheet_cfg = as_plain_dict(st.secrets.get('gsheets', {}))
     sheet_url = sheet_cfg.get('sheet_url')
     sheet_id = sheet_cfg.get('sheet_id') or sheet_cfg.get('spreadsheet_id')
     worksheet_name = sheet_cfg.get('worksheet', 'Sheet1')
     df = None
+    source = "알 수 없음"
 
-    creds_info = st.secrets.get('gdrive_service_account')
+    creds_info = load_service_account_info()
     if (sheet_url or sheet_id) and creds_info:
         try:
             scopes = [
@@ -505,11 +595,42 @@ def load_data():
             worksheet = spreadsheet.worksheet(worksheet_name)
             records = worksheet.get_all_records()
             df = pd.DataFrame(records)
-        except Exception:
+            source = "Google Sheets"
+            logs.append(f"Google Sheets에서 {len(df)}행 로드 (워크시트: {worksheet_name})")
+        except Exception as exc:
+            logs.append(f"Google Sheets 로딩 실패: {exc}")
             df = None
+
+    if (df is None or df.empty) and creds_info:
+        drive_cfg = as_plain_dict(st.secrets.get('drive_excel', {}))
+        drive_file_id = drive_cfg.get('file_id') or drive_cfg.get('id')
+        if not drive_file_id:
+            drive_url = drive_cfg.get('file_url') or drive_cfg.get('url')
+            if isinstance(drive_url, str):
+                match = re.search(r"/d/([^/]+)", drive_url) or re.search(r"id=([^&]+)", drive_url)
+                if match:
+                    drive_file_id = match.group(1)
+        logs.append("Google Drive Excel 시도: {}".format("ID 확인" if drive_file_id else "ID 없음"))
+        drive_sheet = drive_cfg.get('worksheet') or drive_cfg.get('sheet_name') or drive_cfg.get('sheet')
+        downloaded = download_excel_from_drive(
+            creds_info,
+            drive_file_id,
+            worksheet=drive_sheet,
+        ) if drive_file_id else None
+        if downloaded is not None and not downloaded.empty:
+            df = downloaded
+            source = "Google Drive Excel"
+            logs.append(f"Google Drive에서 {len(df)}행 로드 (시트: {drive_sheet or '기본'})")
+        else:
+            if drive_file_id:
+                logs.append("Google Drive에서 데이터를 가져오지 못했습니다.")
+            else:
+                logs.append("Google Drive 파일 ID가 없어 건너뜀")
 
     if df is None or df.empty:
         df = pd.read_excel(EXCEL_FILENAME, engine='openpyxl')
+        source = "로컬 파일"
+        logs.append(f"로컬 파일 '{EXCEL_FILENAME}'에서 {len(df)}행 로드")
 
     df = df.copy()
     required = ['성명', '농축협명']
@@ -519,11 +640,16 @@ def load_data():
 
     df['정제성명'] = df['성명'].astype(str).str.replace(' ', '').str.strip()
     df['정제농축협명'] = df['농축협명'].astype(str).str.replace(' ', '').str.strip()
-    return df, datetime.now()
+    logs.append("데이터 로딩 완료")
+    return df, datetime.now(), source, logs
 
-df, data_loaded_at = load_data()
+df, data_loaded_at, data_source, load_logs = load_data()
 
 st.sidebar.caption(f"데이터 갱신: {data_loaded_at.strftime('%Y-%m-%d %H:%M:%S')}")
+st.sidebar.caption(f"데이터 출처: {data_source}")
+with st.sidebar.expander("로딩 로그", expanded=False):
+    for entry in load_logs:
+        st.write(f"- {entry}")
 
 # --- 페이지 함수 ---
 
