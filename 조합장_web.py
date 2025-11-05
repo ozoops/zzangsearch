@@ -367,6 +367,48 @@ def _normalize_token(text: str) -> str:
     """Normalize tokens for fuzzy matching."""
     return re.sub(r"[\s\-\_/]", "", str(text or "")).lower()
 
+
+def format_year_value(value):
+    """Return a clean year string if possible."""
+    if pd.isna(value):
+        return "정보 없음"
+
+    numeric = pd.to_numeric(str(value).strip(), errors="coerce")
+    if pd.notna(numeric):
+        try:
+            return str(int(numeric))
+        except (ValueError, TypeError):
+            pass
+
+    text = str(value).strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text or "정보 없음"
+
+
+def format_date_value(value):
+    """Return YYYY-MM-DD if convertible, otherwise original string."""
+    if pd.isna(value):
+        return "정보 없음"
+
+    raw = str(value).strip()
+    if not raw:
+        return "정보 없음"
+
+    parsed = pd.to_datetime(raw, errors="coerce")
+    if pd.notna(parsed):
+        return parsed.strftime("%Y-%m-%d")
+
+    numeric = pd.to_numeric(raw, errors="coerce")
+    if pd.notna(numeric):
+        parsed = pd.to_datetime(
+            numeric, origin="1899-12-30", unit="D", errors="coerce"
+        )
+        if pd.notna(parsed):
+            return parsed.strftime("%Y-%m-%d")
+
+    return raw
+
 DEFAULT_THEME = "light"
 
 if "ui_theme" not in st.session_state:
@@ -461,14 +503,15 @@ def show_search_page(df):
                         if col in ['정제성명', '정제농축협명']:
                             continue
                         value = row[col]
-                        if col == '출생년도' and pd.notna(value):
-                            try: value = int(float(value))
-                            except (ValueError, TypeError): pass
-                        if col in ['임기시작일', '임기만료일']:
-                            v = pd.to_datetime(value, errors='coerce') if not pd.to_numeric(str(value).strip(), errors='coerce') else pd.to_datetime(pd.to_numeric(str(value).strip(), errors='coerce'), origin='1899-12-30', unit='D', errors='coerce')
-                            if pd.notna(v): value = v.strftime('%Y-%m-%d')
-                        if pd.isnull(value): value = "정보 없음"
-                        display_value = str(value)
+                        if col in ['출생년도', '출생연도']:
+                            display_value = format_year_value(value)
+                        elif col in ['임기시작일', '임기만료일']:
+                            display_value = format_date_value(value)
+                        else:
+                            if pd.isnull(value):
+                                display_value = "정보 없음"
+                            else:
+                                display_value = str(value).strip() or "정보 없음"
                         info_data.append([col, display_value])
                         printable_pairs.append((col, display_value))
 
