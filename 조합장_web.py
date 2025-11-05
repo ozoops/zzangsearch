@@ -11,6 +11,8 @@ from urllib.parse import quote
 from html import escape
 import streamlit.components.v1 as components
 from streamlit_gsheets_connection import GSheetsConnection
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 
 
@@ -410,6 +412,51 @@ def format_date_value(value):
 
     return raw
 
+FOLDER_ID = "1F66ImTp4VxdPW2W-5jrGoJW1x72Y43Zy"
+
+
+@st.cache_data(ttl=600)
+def list_drive_photos(folder_id: str = FOLDER_ID):
+    """Fetch photo metadata from Google Drive folder."""
+    creds_info = st.secrets.get("gdrive_service_account")
+    if not creds_info:
+        return []
+
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            creds_info,
+            scopes=["https://www.googleapis.com/auth/drive.readonly"],
+        )
+        service = build("drive", "v3", credentials=creds)
+        response = service.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="files(id, name)",
+        ).execute()
+        files = response.get("files", [])
+    except Exception:
+        return []
+
+    results = []
+    for file in files:
+        file_id = file.get("id")
+        name = file.get("name", "")
+        if not file_id or not name:
+            continue
+        url = f"https://drive.google.com/uc?export=view&id={file_id}"
+        results.append({"id": file_id, "name": name, "url": url})
+    return results
+
+
+@st.cache_data(ttl=600)
+def build_photo_lookup():
+    """Return mapping from photo key (file stem) to URL."""
+    lookup = {}
+    for item in list_drive_photos():
+        stem = Path(item["name"]).stem.strip()
+        if stem:
+            lookup[stem] = item["url"]
+    return lookup
+
 DEFAULT_THEME = "light"
 
 if "ui_theme" not in st.session_state:
@@ -512,12 +559,29 @@ def show_search_page(df):
             st.warning(f"입력하신 '{st.session_state.query}'에 해당하는 조합장을 찾을 수 없습니다.")
         else:
             st.success(f"🔎 '{st.session_state.query}'에 대한 총 {len(results)}명의 결과가 검색되었습니다.")
+            photo_lookup = build_photo_lookup()
             for idx, row in results.iterrows():
                 st.markdown(f"### 📋 [{row['성명']}] 조합장")
                 tab1, tab2 = st.tabs(["상세 정보", "최신 뉴스"])
                 with tab1:
+                    candidates = []
+                    seq_value = str(row.get('순번', '')).strip()
+                    if seq_value:
+                        candidates.append(seq_value)
+                    name_value = str(row.get('성명', '')).strip()
+                    if name_value:
+                        candidates.append(name_value)
+
+                    photo_url = None
+                    for key in candidates:
+                        if key in photo_lookup:
+                            photo_url = photo_lookup[key]
+                            break
+
                     photo_path = f"photo/{row['순번']}.jpg"
-                    if os.path.exists(photo_path):
+                    if photo_url:
+                        st.image(photo_url, caption=f"{row['성명']} 조합장 사진", width=180)
+                    elif os.path.exists(photo_path):
                         st.image(photo_path, caption=f"{row['성명']} 조합장 사진", width=180)
                     else:
                         st.info("📁 등록된 사진이 없습니다.")
