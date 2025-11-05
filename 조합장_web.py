@@ -462,7 +462,7 @@ def format_date_value(value):
     return raw
 
 
-def download_excel_from_drive(creds_info, file_id: str, worksheet: str | int | None = None):
+def download_excel_from_drive(creds_info, file_id: str, logs: list, worksheet: str | int | None = None):
     """Download an Excel or Google Sheet file from Drive and return a DataFrame."""
     if not creds_info or not file_id:
         return None
@@ -474,8 +474,11 @@ def download_excel_from_drive(creds_info, file_id: str, worksheet: str | int | N
             scopes=scopes,
         )
         service = build("drive", "v3", credentials=creds)
+        logs.append("Drive API: 서비스 빌드 성공. 파일 메타데이터 요청 중...")
         metadata = service.files().get(fileId=file_id, fields="mimeType,name").execute()
         mime_type = metadata.get("mimeType", "")
+        logs.append(f"Drive API: 파일 타입 '{mime_type}' 확인. 다운로드 요청 시작...")
+
         if mime_type == "application/vnd.google-apps.spreadsheet":
             request = service.files().export_media(
                 fileId=file_id,
@@ -490,12 +493,19 @@ def download_excel_from_drive(creds_info, file_id: str, worksheet: str | int | N
         while not done:
             _, done = downloader.next_chunk()
         buffer.seek(0)
+        logs.append("Drive API: 파일 다운로드 성공. 데이터프레임으로 변환 중...")
 
         read_kwargs = {"engine": "openpyxl"}
         if worksheet is not None:
             read_kwargs["sheet_name"] = worksheet
-        return pd.read_excel(buffer, **read_kwargs)
-    except (HttpError, OSError, ValueError):
+        df = pd.read_excel(buffer, **read_kwargs)
+        logs.append("Drive API: 데이터프레임 변환 성공.")
+        return df
+    except HttpError as error:
+        logs.append(f"Google Drive API 오류: {error}")
+        return None
+    except (OSError, ValueError) as error:
+        logs.append(f"파일 처리 중 오류: {error}")
         return None
 
 
@@ -574,69 +584,58 @@ def load_data():
     sheet_url = sheet_cfg.get('sheet_url')
     sheet_id = sheet_cfg.get('sheet_id') or sheet_cfg.get('spreadsheet_id')
     worksheet_name = sheet_cfg.get('worksheet', 'Sheet1')
+    logs.append(f"Secrets에서 읽은 워크시트 이름: '{worksheet_name}'")
     df = None
     source = "알 수 없음"
-
     creds_info = load_service_account_info()
+
+    # New Primary Method: Use Google Drive API to export the sheet as Excel, bypassing gspread
     if (sheet_url or sheet_id) and creds_info:
-        try:
-            scopes = [
-                'https://www.googleapis.com/auth/spreadsheets.readonly',
-                'https://www.googleapis.com/auth/drive.readonly',
-            ]
-            creds = service_account.Credentials.from_service_account_info(
-                creds_info, scopes=scopes
+        logs.append("gspread를 우회하여 Google Drive API로 직접 다운로드를 시도합니다.")
+        file_id = sheet_id
+        if not file_id and sheet_url:
+            match = re.search(r"/d/([^/]+)", sheet_url) or re.search(r"id=([^&]+)", sheet_url)
+            if match:
+                file_id = match.group(1)
+
+        if file_id:
+            downloaded = download_excel_from_drive(
+                creds_info,
+                file_id,
+                logs,
+                worksheet=worksheet_name,
             )
-            client = gspread.authorize(creds)
-            if sheet_url:
-                spreadsheet = client.open_by_url(sheet_url)
+            if downloaded is not None and not downloaded.empty:
+                df = downloaded
+                source = "Google Drive (Sheet Export)"
+                logs.append(f"Google Drive에서 {len(df)}행 로드 (시트: {worksheet_name or '기본'})")
             else:
-                spreadsheet = client.open_by_key(sheet_id)
-            worksheet = spreadsheet.worksheet(worksheet_name)
-            records = worksheet.get_all_records()
-            df = pd.DataFrame(records)
-            source = "Google Sheets"
-            logs.append(f"Google Sheets에서 {len(df)}행 로드 (워크시트: {worksheet_name})")
-        except Exception as exc:
-            logs.append(f"Google Sheets 로딩 실패: {exc}")
-            df = None
-
-    if (df is None or df.empty) and creds_info:
-        drive_cfg = as_plain_dict(st.secrets.get('drive_excel', {}))
-        drive_file_id = drive_cfg.get('file_id') or drive_cfg.get('id')
-        if not drive_file_id:
-            drive_url = drive_cfg.get('file_url') or drive_cfg.get('url')
-            if isinstance(drive_url, str):
-                match = re.search(r"/d/([^/]+)", drive_url) or re.search(r"id=([^&]+)", drive_url)
-                if match:
-                    drive_file_id = match.group(1)
-        logs.append("Google Drive Excel 시도: {}".format("ID 확인" if drive_file_id else "ID 없음"))
-        drive_sheet = drive_cfg.get('worksheet') or drive_cfg.get('sheet_name') or drive_cfg.get('sheet')
-        downloaded = download_excel_from_drive(
-            creds_info,
-            drive_file_id,
-            worksheet=drive_sheet,
-        ) if drive_file_id else None
-        if downloaded is not None and not downloaded.empty:
-            df = downloaded
-            source = "Google Drive Excel"
-            logs.append(f"Google Drive에서 {len(df)}행 로드 (시트: {drive_sheet or '기본'})")
+                logs.append("Google Drive API를 통한 다운로드에 실패했습니다.")
         else:
-            if drive_file_id:
-                logs.append("Google Drive에서 데이터를 가져오지 못했습니다.")
-            else:
-                logs.append("Google Drive 파일 ID가 없어 건너뜀")
+            logs.append("secrets에서 Google Drive 파일 ID/URL을 찾을 수 없습니다.")
 
+    # Fallback to local file
     if df is None or df.empty:
-        df = pd.read_excel(EXCEL_FILENAME, engine='openpyxl')
-        source = "로컬 파일"
-        logs.append(f"로컬 파일 '{EXCEL_FILENAME}'에서 {len(df)}행 로드")
+        logs.append(f"최종적으로 로컬 파일 '{EXCEL_FILENAME}'을 읽습니다.")
+        try:
+            df = pd.read_excel(EXCEL_FILENAME, engine='openpyxl')
+            source = "로컬 파일"
+            logs.append(f"로컬 파일 '{EXCEL_FILENAME}'에서 {len(df)}행 로드")
+        except Exception as e:
+            logs.append(f"로컬 파일 '{EXCEL_FILENAME}' 로딩 실패: {e}")
+            st.error(f"모든 데이터 소스(Google, 로컬)에서 데이터를 불러오는 데 실패했습니다. 로컬 파일 '{EXCEL_FILENAME}'을 확인해주세요.")
+            st.stop()
+
+    if df is None:
+        st.error("데이터프레임이 비어 있습니다. 데이터 소스를 확인해주세요.")
+        st.stop()
 
     df = df.copy()
     required = ['성명', '농축협명']
     missing = [col for col in required if col not in df.columns]
     if missing:
-        raise ValueError(f"필수 컬럼이 없습니다: {missing}")
+        st.error(f"데이터에 필수 컬럼이 없습니다: {missing}. Google Sheet 또는 로컬 파일의 헤더를 확인해주세요.")
+        st.stop()
 
     df['정제성명'] = df['성명'].astype(str).str.replace(' ', '').str.strip()
     df['정제농축협명'] = df['농축협명'].astype(str).str.replace(' ', '').str.strip()
