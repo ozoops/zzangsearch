@@ -57,8 +57,8 @@ def as_plain_dict(value):
 
 def load_service_account_info():
     """Load Google service-account credentials from secrets, env vars, or local file."""
-    secrets_info = st.secrets.get("gdrive_service_account")
-    if isinstance(secrets_info, dict) and secrets_info.get("private_key"):
+    secrets_info = as_plain_dict(st.secrets.get("gdrive_service_account"))
+    if secrets_info.get("private_key"):
         return secrets_info
 
     raw_json = st.secrets.get("gdrive_service_account_json")
