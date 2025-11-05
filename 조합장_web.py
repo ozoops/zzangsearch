@@ -4,13 +4,13 @@ import os
 import base64
 import json
 import altair as alt
+import gspread
 import re
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
 from html import escape
 import streamlit.components.v1 as components
-from streamlit_gsheets_connection import GSheetsConnection
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -483,15 +483,28 @@ EXCEL_FILENAME = "조합장 현황.xlsx"
 def load_data():
     sheet_cfg = st.secrets.get('gsheets', {})
     sheet_url = sheet_cfg.get('sheet_url')
-    worksheet = sheet_cfg.get('worksheet', 'Sheet1')
+    sheet_id = sheet_cfg.get('sheet_id') or sheet_cfg.get('spreadsheet_id')
+    worksheet_name = sheet_cfg.get('worksheet', 'Sheet1')
     df = None
 
-    if sheet_url:
+    creds_info = st.secrets.get('gdrive_service_account')
+    if (sheet_url or sheet_id) and creds_info:
         try:
-            conn = st.connection('gsheets', type=GSheetsConnection)
-            df = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
-            if isinstance(df, dict):
-                df = pd.DataFrame(df)
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets.readonly',
+                'https://www.googleapis.com/auth/drive.readonly',
+            ]
+            creds = service_account.Credentials.from_service_account_info(
+                creds_info, scopes=scopes
+            )
+            client = gspread.authorize(creds)
+            if sheet_url:
+                spreadsheet = client.open_by_url(sheet_url)
+            else:
+                spreadsheet = client.open_by_key(sheet_id)
+            worksheet = spreadsheet.worksheet(worksheet_name)
+            records = worksheet.get_all_records()
+            df = pd.DataFrame(records)
         except Exception:
             df = None
 
