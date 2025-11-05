@@ -10,6 +10,7 @@ from datetime import datetime
 from urllib.parse import quote
 from html import escape
 import streamlit.components.v1 as components
+from streamlit_gsheets_connection import GSheetsConnection
 
 
 
@@ -431,14 +432,38 @@ apply_theme(st.session_state.ui_theme)
 # --- 데이터 로딩 ---
 EXCEL_FILENAME = "조합장 현황.xlsx"
 
-@st.cache_data(ttl=0)
+@st.cache_data(ttl=600)
 def load_data():
-    df = pd.read_excel(EXCEL_FILENAME, engine='openpyxl')
+    sheet_cfg = st.secrets.get('gsheets', {})
+    sheet_url = sheet_cfg.get('sheet_url')
+    worksheet = sheet_cfg.get('worksheet', 'Sheet1')
+    df = None
+
+    if sheet_url:
+        try:
+            conn = st.connection('gsheets', type=GSheetsConnection)
+            df = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
+            if isinstance(df, dict):
+                df = pd.DataFrame(df)
+        except Exception:
+            df = None
+
+    if df is None or df.empty:
+        df = pd.read_excel(EXCEL_FILENAME, engine='openpyxl')
+
+    df = df.copy()
+    required = ['성명', '농축협명']
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(f"필수 컬럼이 없습니다: {missing}")
+
     df['정제성명'] = df['성명'].astype(str).str.replace(' ', '').str.strip()
     df['정제농축협명'] = df['농축협명'].astype(str).str.replace(' ', '').str.strip()
-    return df
+    return df, datetime.now()
 
-df = load_data()
+df, data_loaded_at = load_data()
+
+st.sidebar.caption(f"데이터 갱신: {data_loaded_at.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- 페이지 함수 ---
 
