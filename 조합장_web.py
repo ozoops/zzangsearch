@@ -195,6 +195,11 @@ def apply_theme(mode: str):
         .stMetric label, .stMetric span {
             color: #f8fafc !important;
         }
+        div[data-testid="stTable"] tbody tr th,
+        div[data-testid="stTable"] tbody tr td:first-child {
+            white-space: nowrap !important;
+            word-break: keep-all;
+        }
         </style>
         """
     else:
@@ -242,6 +247,11 @@ def apply_theme(mode: str):
         }
         h1, h2, h3, h4, h5, h6, label, p, span {
             text-shadow: 0 0 1px rgba(255, 255, 255, 0.6);
+        }
+        div[data-testid="stTable"] tbody tr th,
+        div[data-testid="stTable"] tbody tr td:first-child {
+            white-space: nowrap !important;
+            word-break: keep-all;
         }
         </style>
         """
