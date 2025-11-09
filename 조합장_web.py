@@ -649,6 +649,7 @@ def load_data():
 
     df['정제성명'] = df['성명'].astype(str).str.replace(' ', '').str.strip()
     df['정제농축협명'] = df['농축협명'].astype(str).str.replace(' ', '').str.strip()
+    df['정제농축협명핵심'] = df['정제농축협명'].str.replace('농협', '', regex=False)
     logs.append("데이터 로딩 완료")
     return df, datetime.now(), source, logs
 
@@ -686,7 +687,18 @@ def show_search_page(df):
                 if search_option == "성명":
                     results = df[df['정제성명'] == search_text]
                 else:
-                    results = df[df['정제농축협명'].str.contains(f'^{search_text}$', regex=True)]
+                    query_variants = {search_text}
+                    shortened = search_text.replace('농협', '')
+                    if shortened:
+                        query_variants.add(shortened)
+                    mask = pd.Series(False, index=df.index)
+                    for token in query_variants:
+                        if not token:
+                            continue
+                        mask |= df['정제농축협명'].str.contains(token, regex=False, na=False)
+                        if '정제농축협명핵심' in df.columns:
+                            mask |= df['정제농축협명핵심'].str.contains(token, regex=False, na=False)
+                    results = df[mask]
                 st.session_state.results = results
                 st.session_state.query = query
             else:
@@ -713,11 +725,27 @@ def show_search_page(df):
                 tab1, tab2 = st.tabs(["상세 정보", "최신 뉴스"])
                 with tab1:
                     candidates = []
-                    seq_value = str(row.get('순번', '')).strip()
-                    if seq_value:
-                        candidates.append(seq_value)
+                    photo_columns = ['순번', '사진번호', '사진ID', '사진키', '번호', 'No', 'no']
+                    for col in photo_columns:
+                        raw_value = row.get(col, '')
+                        if pd.isna(raw_value):
+                            continue
+                        text_value = str(raw_value).strip()
+                        if text_value.endswith('.0'):
+                            text_value = text_value[:-2]
+                        if text_value and text_value not in candidates:
+                            candidates.append(text_value)
+                    idx_candidate = ""
+                    try:
+                        idx_candidate = str(int(idx) + 1)
+                    except (TypeError, ValueError, OverflowError):
+                        idx_str = str(idx).strip()
+                        if idx_str.isdigit():
+                            idx_candidate = str(int(idx_str) + 1)
+                    if idx_candidate and idx_candidate not in candidates:
+                        candidates.append(idx_candidate)
                     name_value = str(row.get('성명', '')).strip()
-                    if name_value:
+                    if name_value and name_value not in candidates:
                         candidates.append(name_value)
 
                     photo_url = None
@@ -726,10 +754,11 @@ def show_search_page(df):
                             photo_url = photo_lookup[key]
                             break
 
-                    photo_path = f"photo/{row['순번']}.jpg"
+                    photo_key = next((candidate for candidate in candidates if candidate), None)
+                    photo_path = f"photo/{photo_key}.jpg" if photo_key else None
                     if photo_url:
                         st.image(photo_url, caption=f"{row['성명']} 조합장 사진", width=180)
-                    elif os.path.exists(photo_path):
+                    elif photo_path and os.path.exists(photo_path):
                         st.image(photo_path, caption=f"{row['성명']} 조합장 사진", width=180)
                     else:
                         st.info("📁 등록된 사진이 없습니다.")
@@ -737,7 +766,7 @@ def show_search_page(df):
                     info_data = []
                     printable_pairs = []
                     for col in df.columns:
-                        if col in ['정제성명', '정제농축협명']:
+                        if col in ['정제성명', '정제농축협명', '정제농축협명핵심']:
                             continue
                         value = row[col]
                         if col in ['출생년도', '출생연도']:
