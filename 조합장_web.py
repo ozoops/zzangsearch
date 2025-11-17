@@ -803,7 +803,7 @@ def show_analysis_page(df):
     # 분석할 컬럼 선택
     columns = ['순번', '시도', '시군', '농축협명', '유형', '성명', '출생연도', '주요경력', '연락처', '임기시작일', '임기만료일', '상임구분', '선수', '부가의결권', '비고']
     # 사용자가 분석에 의미있는 컬럼을 선택하도록 유도
-    default_cols = ['시도', '시군', '유형', '상임구분', '선수']
+    default_cols = ['시도', '시군', '유형', '상임구분', '선수', '부가의결권']
     analyzable_columns = [col for col in columns if col in default_cols or (df[col].nunique() < 50 and df[col].nunique() > 1)] # 유니크 값이 너무 많거나 1개인 컬럼 제외
     
     selected_column = st.selectbox("분석할 컬럼을 선택하세요", analyzable_columns)
