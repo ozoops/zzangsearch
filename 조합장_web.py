@@ -719,6 +719,69 @@ def show_search_page(df):
             st.warning(f"입력하신 '{st.session_state.query}'에 해당하는 조합장을 찾을 수 없습니다.")
         else:
             st.success(f"🔎 '{st.session_state.query}'에 대한 총 {len(results)}명의 결과가 검색되었습니다.")
+            
+            # --- 검색 결과 시각화 추가 ---
+            if len(results) > 1:
+                with st.expander("📊 검색 결과 시각화 분석", expanded=True):
+                    st.markdown("###### 검색된 조합장들의 주요 분포")
+                    
+                    # 데이터 전처리 (시각화용)
+                    viz_df = results.copy()
+                    # 선수(당선횟수) 숫자 변환 시도
+                    viz_df['선수_숫자'] = pd.to_numeric(viz_df['선수'], errors='coerce').fillna(0)
+                    
+                    col_viz1, col_viz2, col_viz3 = st.columns(3)
+                    
+                    with col_viz1:
+                        # 유형별 분포 (파이차트 -> 도넛차트)
+                        type_counts = viz_df['유형'].value_counts().reset_index()
+                        type_counts.columns = ['유형', '인원수']
+                        
+                        base = alt.Chart(type_counts).encode(
+                            theta=alt.Theta("인원수", stack=True)
+                        )
+                        pie = base.mark_arc(innerRadius=50).encode(
+                            color=alt.Color("유형", legend=None),
+                            order=alt.Order("인원수", sort="descending"),
+                            tooltip=["유형", "인원수"]
+                        )
+                        text = base.mark_text(radius=140).encode(
+                            text=alt.Text("인원수"),
+                            order=alt.Order("인원수", sort="descending"),
+                            color=alt.value("black")  # 다크모드 대응 필요시 조정
+                        )
+                        st.altair_chart(pie + text, use_container_width=True)
+                        st.caption("유형별 분포")
+
+                    with col_viz2:
+                        # 선수별 분포 (막대)
+                        term_counts = viz_df['선수'].value_counts().reset_index()
+                        term_counts.columns = ['선수', '인원수']
+                        
+                        bar_term = alt.Chart(term_counts).mark_bar().encode(
+                            x=alt.X('선수', sort='-y', title='당선 횟수'),
+                            y=alt.Y('인원수', title='인원'),
+                            color=alt.Color('선수', legend=None),
+                            tooltip=['선수', '인원수']
+                        ).properties(height=200)
+                        st.altair_chart(bar_term, use_container_width=True)
+                        st.caption("당선 횟수별 분포")
+
+                    with col_viz3:
+                        # 시도별 분포 (막대)
+                        if '시도' in viz_df.columns:
+                            region_counts = viz_df['시도'].value_counts().reset_index()
+                            region_counts.columns = ['지역', '인원수']
+                            
+                            bar_region = alt.Chart(region_counts).mark_bar().encode(
+                                x=alt.X('지역', sort='-y', title='지역'),
+                                y=alt.Y('인원수', title='인원'),
+                                color=alt.value('#3b82f6'),
+                                tooltip=['지역', '인원수']
+                            ).properties(height=200)
+                            st.altair_chart(bar_region, use_container_width=True)
+                            st.caption("지역별 분포")
+            # ---------------------------
             photo_lookup = build_photo_lookup()
             for idx, row in results.iterrows():
                 st.markdown(f"### 📋 [{row['성명']}] 조합장")
@@ -797,92 +860,165 @@ def show_search_page(df):
 
 def show_analysis_page(df):
     """데이터 통계 분석 페이지를 표시합니다."""
-    st.title("📊 통계 자료")
-    st.write("엑셀 파일의 특정 컬럼을 선택하여 데이터 분포를 확인합니다.")
+    st.title("📊 조합장 현황 종합 대시보드")
+    st.write("전체 조합장 데이터에 대한 종합적인 통계와 분석 정보를 제공합니다.")
 
-    # 분석할 컬럼 선택
-    columns = ['순번', '시도', '시군', '농축협명', '유형', '성명', '출생연도', '주요경력', '연락처', '임기시작일', '임기만료일', '상임구분', '선수', '부가의결권', '비고']
-    # 사용자가 분석에 의미있는 컬럼을 선택하도록 유도
-    default_cols = ['시도', '시군', '유형', '상임구분', '선수', '부가의결권']
-    analyzable_columns = [col for col in columns if col in default_cols or (df[col].nunique() < 50 and df[col].nunique() > 1)] # 유니크 값이 너무 많거나 1개인 컬럼 제외
+    # --- 데이터 전처리 ---
+    analysis_df = df.copy()
     
-    selected_column = st.selectbox("분석할 컬럼을 선택하세요", analyzable_columns)
+    # 1. 나이 계산
+    current_year = datetime.now().year
+    if '출생연도' in analysis_df.columns:
+        analysis_df['출생연도_숫자'] = pd.to_numeric(analysis_df['출생연도'], errors='coerce')
+        analysis_df['나이'] = analysis_df['출생연도_숫자'].apply(lambda x: current_year - x if pd.notnull(x) else None)
+    else:
+        analysis_df['나이'] = None
+    
+    # 2. 임기만료일 날짜 변환
+    if '임기만료일' in analysis_df.columns:
+        analysis_df['임기만료일_dt'] = pd.to_datetime(analysis_df['임기만료일'], errors='coerce')
+        analysis_df['임기만료년도'] = analysis_df['임기만료일_dt'].dt.year
+    else:
+        analysis_df['임기만료일_dt'] = pd.NaT
+        analysis_df['임기만료년도'] = None
+    
+    # 3. 선수 숫자 변환
+    if '선수' in analysis_df.columns:
+        analysis_df['선수_숫자'] = pd.to_numeric(analysis_df['선수'], errors='coerce')
+    else:
+        analysis_df['선수_숫자'] = None
 
-    if selected_column:
-        st.markdown(f"### 📈 **{selected_column}** 컬럼 데이터 분포")
-        
-        # 데이터 집계
-        value_counts = df[selected_column].value_counts().rename_axis(selected_column).reset_index(name="count")
+    # --- KPI 지표 ---
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    
+    total_count = len(analysis_df)
+    avg_age = analysis_df['나이'].mean() if '나이' in analysis_df.columns else None
+    avg_term = analysis_df['선수_숫자'].mean() if '선수_숫자' in analysis_df.columns else None
+    
+    # 임기 만료 임박 (6개월 이내)
+    today = datetime.now()
+    six_months_later = today + pd.DateOffset(months=6)
+    
+    if '임기만료일_dt' in analysis_df.columns and not analysis_df['임기만료일_dt'].isna().all():
+        expiring_soon = analysis_df[
+            (analysis_df['임기만료일_dt'] >= today) & 
+            (analysis_df['임기만료일_dt'] <= six_months_later)
+        ]
+        expiring_count = len(expiring_soon)
+    else:
+        expiring_count = 0
 
-        # 많은 카테고리가 있을 경우 상위 일부만 선택할 수 있도록 옵션 제공
-        max_items = len(value_counts)
-        top_n = max_items
-        if max_items > 10:
-            show_all = st.checkbox(f"전체 {max_items}개 항목 모두 보기", value=False)
-            if not show_all:
-                default_top = min(20, max_items)
-                slider_min = 5 if max_items >= 5 else 1
-                top_n = st.slider("표시할 항목 수", min_value=slider_min, max_value=max_items, value=default_top, step=1)
-        value_counts = value_counts.sort_values("count", ascending=False).head(top_n)
+    with kpi1:
+        st.metric("전체 조합장 수", f"{total_count}명")
+    with kpi2:
+        st.metric("평균 연령", f"{avg_age:.1f}세" if pd.notnull(avg_age) else "-")
+    with kpi3:
+        st.metric("평균 당선 횟수", f"{avg_term:.1f}선" if pd.notnull(avg_term) else "-")
+    with kpi4:
+        st.metric("임기 만료 임박(6개월)", f"{expiring_count}명", delta_color="inverse")
 
-        # 데이터 표현 방식 선택 (절대값 / 비율)
-        display_mode = st.radio("표시 방식", ("건수", "비율(%)"), horizontal=True)
-        total = value_counts["count"].sum()
-        value_counts["percentage"] = (value_counts["count"] / total * 100).round(2) if total else 0
+    st.divider()
 
-        if display_mode == "건수":
-            y_field = "count"
-            y_title = "건수"
-        else:
-            y_field = "percentage"
-            y_title = "비율 (%)"
+    # --- 탭 구성 ---
+    tab1, tab2, tab3 = st.tabs(["📈 인구/유형 분석", "🗺️ 지역별 분석", "📅 임기/선거 분석"])
 
-        chart_data = value_counts.copy()
-        y_max = chart_data[y_field].max() if not chart_data.empty else 0
-
-        chart = (
-            alt.Chart(chart_data)
-            .mark_bar(size=20)
-            .encode(
-                x=alt.X(f"{selected_column}:N", sort="-y", title=selected_column),
-                y=alt.Y(f"{y_field}:Q", title=y_title,
-                        scale=alt.Scale(domain=(0, y_max * 1.1 if y_max else 1))),
-                tooltip=[
-                    alt.Tooltip(f"{selected_column}:N", title=selected_column),
-                    alt.Tooltip("count:Q", title="건수"),
-                    alt.Tooltip("percentage:Q", title="비율 (%)"),
-                ],
-            )
-            .properties(height=400)
-        )
-
+    with tab1:
         col1, col2 = st.columns(2)
+        
         with col1:
-            st.write("**막대 그래프**")
-            st.altair_chart(chart, use_container_width=True)
-
+            st.subheader("연령대별 분포")
+            if '나이' in analysis_df.columns:
+                # 연령대 구간 생성
+                analysis_df['연령대'] = (analysis_df['나이'] // 10 * 10).fillna(-1).astype(int).astype(str) + "대"
+                analysis_df.loc[analysis_df['연령대'] == "-1대", '연령대'] = "정보없음"
+                
+                age_counts = analysis_df['연령대'].value_counts().reset_index()
+                age_counts.columns = ['연령대', '인원수']
+                # 정렬
+                age_counts = age_counts.sort_values('연령대')
+                
+                chart_age = alt.Chart(age_counts).mark_bar().encode(
+                    x=alt.X('연령대', title='연령대'),
+                    y=alt.Y('인원수', title='인원(명)'),
+                    color=alt.value('#f59e0b'),
+                    tooltip=['연령대', '인원수']
+                ).properties(height=300)
+                st.altair_chart(chart_age, use_container_width=True)
+        
         with col2:
-            st.write("**데이터 표**")
-            display_cols = [selected_column, "count", "percentage"]
-            display_df = chart_data[display_cols].rename(columns={"count": "건수", "percentage": "비율(%)"})
-            st.dataframe(display_df)
+            st.subheader("당선 횟수(선수) 분포")
+            term_counts = analysis_df['선수'].value_counts().reset_index()
+            term_counts.columns = ['선수', '인원수']
+            
+            chart_term = alt.Chart(term_counts).mark_bar().encode(
+                x=alt.X('선수', sort='-y', title='당선 횟수'),
+                y=alt.Y('인원수', title='인원(명)'),
+                color=alt.value('#10b981'),
+                tooltip=['선수', '인원수']
+            ).properties(height=300)
+            st.altair_chart(chart_term, use_container_width=True)
 
-        export_prefix = _normalize_token(selected_column) or "column"
-        summary_lines = [f"[{selected_column}] 분포 (상위 {len(chart_data)}건)"]
-        for _, row in chart_data.iterrows():
-            count_value = row.get("count", 0)
-            try:
-                count_display = int(count_value)
-            except (TypeError, ValueError):
-                count_display = count_value
-            percentage_value = row.get("percentage", 0)
-            try:
-                percentage_display = f"{float(percentage_value):.2f}"
-            except (TypeError, ValueError):
-                percentage_display = str(percentage_value)
-            summary_lines.append(f"- {row.get(selected_column, '미기재')}: {count_display}건 ({percentage_display}%)")
+        st.subheader("유형별 구성 비율")
+        type_counts = analysis_df['유형'].value_counts().reset_index()
+        type_counts.columns = ['유형', '인원수']
+        
+        chart_type = alt.Chart(type_counts).mark_arc(innerRadius=60).encode(
+            theta=alt.Theta("인원수", stack=True),
+            color=alt.Color("유형", legend=alt.Legend(title="유형")),
+            tooltip=["유형", "인원수"],
+            order=alt.Order("인원수", sort="descending")
+        ).properties(height=300)
+        
+        st.altair_chart(chart_type, use_container_width=True)
 
-        summary_text = "\n".join(summary_lines)
+    with tab2:
+        st.subheader("지역별 조합장 현황")
+        if '시도' in analysis_df.columns:
+            region_counts = analysis_df['시도'].value_counts().reset_index()
+            region_counts.columns = ['지역', '인원수']
+            
+            chart_region = alt.Chart(region_counts).mark_bar().encode(
+                x=alt.X('지역', sort='-y', title='지역'),
+                y=alt.Y('인원수', title='인원(명)'),
+                color=alt.Color('지역', legend=None, scale=alt.Scale(scheme='category20')),
+                tooltip=['지역', '인원수']
+            ).properties(height=400)
+            st.altair_chart(chart_region, use_container_width=True)
+            
+            with st.expander("지역별 상세 데이터 보기"):
+                st.dataframe(region_counts)
+
+    with tab3:
+        st.subheader("연도별 임기 만료 예정 현황")
+        if '임기만료년도' in analysis_df.columns:
+            expire_counts = analysis_df['임기만료년도'].value_counts().reset_index()
+            expire_counts.columns = ['년도', '인원수']
+            expire_counts = expire_counts.dropna().sort_values('년도')
+            expire_counts['년도'] = expire_counts['년도'].astype(int).astype(str)
+            
+            chart_expire = alt.Chart(expire_counts).mark_line(point=True).encode(
+                x=alt.X('년도', title='임기 만료 연도'),
+                y=alt.Y('인원수', title='인원(명)'),
+                tooltip=['년도', '인원수']
+            ).properties(height=350)
+            st.altair_chart(chart_expire, use_container_width=True)
+            
+            st.info("💡 특정 연도에 임기 만료가 집중되어 있다면, 해당 시기에 전국 동시 조합장 선거가 예정되어 있을 가능성이 높습니다.")
+
+    # --- 상세 데이터 탐색 (기존 기능 유지 및 개선) ---
+    st.divider()
+    st.subheader("🔎 상세 데이터 탐색")
+    st.write("원하는 컬럼을 선택하여 세부 분포를 확인할 수 있습니다.")
+    
+    columns = [col for col in df.columns if col not in ['정제성명', '정제농축협명', '정제농축협명핵심', '사진ID', '사진키', '사진번호']]
+    selected_column = st.selectbox("분석할 컬럼 선택", columns, index=columns.index('시군') if '시군' in columns else 0)
+    
+    if selected_column:
+        val_counts = df[selected_column].value_counts().reset_index()
+        val_counts.columns = [selected_column, '건수']
+        st.bar_chart(val_counts.set_index(selected_column))
+        with st.expander("데이터 표 보기"):
+            st.dataframe(val_counts)
 
 
 # --- 사이드바 및 메인 로직 ---
