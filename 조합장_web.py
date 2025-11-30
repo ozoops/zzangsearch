@@ -889,29 +889,22 @@ def show_analysis_page(df):
         analysis_df['선수_숫자'] = None
 
     # --- KPI 지표 ---
-    # 모바일 가독성을 위해 2x2 그리드로 배치
-    kpi_row1_col1, kpi_row1_col2 = st.columns(2)
-    kpi_row2_col1, kpi_row2_col2 = st.columns(2)
+    # 지표가 3개이므로 3열로 배치 (모바일에서는 자동 스택됨)
+    kpi1, kpi2, kpi3 = st.columns(3)
     
     total_count = len(analysis_df)
     avg_age = analysis_df['나이'].mean() if '나이' in analysis_df.columns else None
-    
-    # 최다선 계산
-    max_term = analysis_df['선수_숫자'].max() if '선수_숫자' in analysis_df.columns else 0
-    max_term_count = len(analysis_df[analysis_df['선수_숫자'] == max_term]) if max_term > 0 else 0
     
     # 부가의결권 보유 수 계산
     vote_count_kpi = 0
     if '부가의결권' in analysis_df.columns:
         vote_count_kpi = len(analysis_df[analysis_df['부가의결권'].astype(str).str.strip() == '여'])
 
-    with kpi_row1_col1:
+    with kpi1:
         st.metric("전체 조합장 수", f"{total_count}명")
-    with kpi_row1_col2:
+    with kpi2:
         st.metric("평균 연령", f"{avg_age:.1f}세" if pd.notnull(avg_age) else "-")
-    with kpi_row2_col1:
-        st.metric("최다선 기록", f"{int(max_term)}선 ({max_term_count}명)" if max_term > 0 else "-")
-    with kpi_row2_col2:
+    with kpi3:
         st.metric("부가의결권 보유", f"{vote_count_kpi}개소", delta_color="off")
 
     st.divider()
