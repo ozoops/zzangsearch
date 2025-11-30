@@ -1050,7 +1050,7 @@ def show_analysis_page(df):
     
     exclude_cols = [
         '정제성명', '정제농축협명', '정제농축협명핵심', '사진ID', '사진키', '사진번호',
-        '순번', '시도', '성명', '주요경력', '임기시작일', '임기만료일', '부가의결권', '비고'
+        '순번', '시도', '성명', '주요경력', '임기시작일', '임기만료일', '부가의결권', '비고', '연락처'
     ]
     columns = [col for col in df.columns if col not in exclude_cols]
     
