@@ -889,7 +889,9 @@ def show_analysis_page(df):
         analysis_df['선수_숫자'] = None
 
     # --- KPI 지표 ---
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    # 모바일 가독성을 위해 2x2 그리드로 배치
+    kpi_row1_col1, kpi_row1_col2 = st.columns(2)
+    kpi_row2_col1, kpi_row2_col2 = st.columns(2)
     
     total_count = len(analysis_df)
     avg_age = analysis_df['나이'].mean() if '나이' in analysis_df.columns else None
@@ -908,13 +910,13 @@ def show_analysis_page(df):
     else:
         expiring_count = 0
 
-    with kpi1:
+    with kpi_row1_col1:
         st.metric("전체 조합장 수", f"{total_count}명")
-    with kpi2:
+    with kpi_row1_col2:
         st.metric("평균 연령", f"{avg_age:.1f}세" if pd.notnull(avg_age) else "-")
-    with kpi3:
+    with kpi_row2_col1:
         st.metric("평균 당선 횟수", f"{avg_term:.1f}선" if pd.notnull(avg_term) else "-")
-    with kpi4:
+    with kpi_row2_col2:
         st.metric("임기 만료 임박(6개월)", f"{expiring_count}명", delta_color="inverse")
 
     st.divider()
@@ -923,40 +925,39 @@ def show_analysis_page(df):
     tab1, tab2, tab3 = st.tabs(["📈 인구/유형 분석", "🗺️ 지역별 분석", "�️ 부가의결권 분석"])
 
     with tab1:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("연령대별 분포")
-            if '나이' in analysis_df.columns:
-                # 연령대 구간 생성
-                analysis_df['연령대'] = (analysis_df['나이'] // 10 * 10).fillna(-1).astype(int).astype(str) + "대"
-                analysis_df.loc[analysis_df['연령대'] == "-1대", '연령대'] = "정보없음"
-                
-                age_counts = analysis_df['연령대'].value_counts().reset_index()
-                age_counts.columns = ['연령대', '인원수']
-                # 정렬
-                age_counts = age_counts.sort_values('연령대')
-                
-                chart_age = alt.Chart(age_counts).mark_bar().encode(
-                    x=alt.X('연령대', title='연령대'),
-                    y=alt.Y('인원수', title='인원(명)'),
-                    color=alt.value('#f59e0b'),
-                    tooltip=['연령대', '인원수']
-                ).properties(height=300)
-                st.altair_chart(chart_age, use_container_width=True)
-        
-        with col2:
-            st.subheader("당선 횟수(선수) 분포")
-            term_counts = analysis_df['선수'].value_counts().reset_index()
-            term_counts.columns = ['선수', '인원수']
+        # 모바일 가독성을 위해 컬럼 분할 제거하고 순차 배치
+        st.subheader("연령대별 분포")
+        if '나이' in analysis_df.columns:
+            # 연령대 구간 생성
+            analysis_df['연령대'] = (analysis_df['나이'] // 10 * 10).fillna(-1).astype(int).astype(str) + "대"
+            analysis_df.loc[analysis_df['연령대'] == "-1대", '연령대'] = "정보없음"
             
-            chart_term = alt.Chart(term_counts).mark_bar().encode(
-                x=alt.X('선수', sort='-y', title='당선 횟수'),
+            age_counts = analysis_df['연령대'].value_counts().reset_index()
+            age_counts.columns = ['연령대', '인원수']
+            # 정렬
+            age_counts = age_counts.sort_values('연령대')
+            
+            chart_age = alt.Chart(age_counts).mark_bar().encode(
+                x=alt.X('연령대', title='연령대'),
                 y=alt.Y('인원수', title='인원(명)'),
-                color=alt.value('#10b981'),
-                tooltip=['선수', '인원수']
+                color=alt.value('#f59e0b'),
+                tooltip=['연령대', '인원수']
             ).properties(height=300)
-            st.altair_chart(chart_term, use_container_width=True)
+            st.altair_chart(chart_age, use_container_width=True)
+    
+        st.divider()
+
+        st.subheader("당선 횟수(선수) 분포")
+        term_counts = analysis_df['선수'].value_counts().reset_index()
+        term_counts.columns = ['선수', '인원수']
+        
+        chart_term = alt.Chart(term_counts).mark_bar().encode(
+            x=alt.X('선수', sort='-y', title='당선 횟수'),
+            y=alt.Y('인원수', title='인원(명)'),
+            color=alt.value('#10b981'),
+            tooltip=['선수', '인원수']
+        ).properties(height=300)
+        st.altair_chart(chart_term, use_container_width=True)
 
         st.subheader("유형별 구성 비율")
         type_counts = analysis_df['유형'].value_counts().reset_index()
@@ -1005,36 +1006,36 @@ def show_analysis_page(df):
             
             st.divider()
             
-            # 시각화: 지역별 분포
-            col_g1, col_g2 = st.columns(2)
+            st.divider()
             
-            with col_g1:
-                st.markdown("###### 지역별 부가의결권 보유 분포")
-                if '시도' in vote_df.columns:
-                    vote_region_counts = vote_df['시도'].value_counts().reset_index()
-                    vote_region_counts.columns = ['지역', '보유수']
-                    
-                    chart_vote_region = alt.Chart(vote_region_counts).mark_bar().encode(
-                        x=alt.X('지역', sort='-y', title='지역'),
-                        y=alt.Y('보유수', title='조합 수'),
-                        color=alt.value('#8b5cf6'),
-                        tooltip=['지역', '보유수']
-                    ).properties(height=300)
-                    st.altair_chart(chart_vote_region, use_container_width=True)
+            # 시각화: 지역별 분포 (모바일 최적화를 위해 순차 배치)
+            st.markdown("###### 지역별 부가의결권 보유 분포")
+            if '시도' in vote_df.columns:
+                vote_region_counts = vote_df['시도'].value_counts().reset_index()
+                vote_region_counts.columns = ['지역', '보유수']
+                
+                chart_vote_region = alt.Chart(vote_region_counts).mark_bar().encode(
+                    x=alt.X('지역', sort='-y', title='지역'),
+                    y=alt.Y('보유수', title='조합 수'),
+                    color=alt.value('#8b5cf6'),
+                    tooltip=['지역', '보유수']
+                ).properties(height=300)
+                st.altair_chart(chart_vote_region, use_container_width=True)
 
-            with col_g2:
-                st.markdown("###### 유형별 부가의결권 보유 분포")
-                if '유형' in vote_df.columns:
-                    vote_type_counts = vote_df['유형'].value_counts().reset_index()
-                    vote_type_counts.columns = ['유형', '보유수']
-                    
-                    chart_vote_type = alt.Chart(vote_type_counts).mark_arc(innerRadius=40).encode(
-                        theta=alt.Theta("보유수", stack=True),
-                        color=alt.Color("유형", legend=alt.Legend(title="유형"), scale=alt.Scale(scheme='pastel1')),
-                        tooltip=["유형", "보유수"],
-                        order=alt.Order("보유수", sort="descending")
-                    ).properties(height=300)
-                    st.altair_chart(chart_vote_type, use_container_width=True)
+            st.divider()
+
+            st.markdown("###### 유형별 부가의결권 보유 분포")
+            if '유형' in vote_df.columns:
+                vote_type_counts = vote_df['유형'].value_counts().reset_index()
+                vote_type_counts.columns = ['유형', '보유수']
+                
+                chart_vote_type = alt.Chart(vote_type_counts).mark_arc(innerRadius=40).encode(
+                    theta=alt.Theta("보유수", stack=True),
+                    color=alt.Color("유형", legend=alt.Legend(title="유형"), scale=alt.Scale(scheme='pastel1')),
+                    tooltip=["유형", "보유수"],
+                    order=alt.Order("보유수", sort="descending")
+                ).properties(height=300)
+                st.altair_chart(chart_vote_type, use_container_width=True)
             
             st.markdown("###### 부가의결권 보유 조합 목록")
             with st.expander("목록 보기 (클릭)", expanded=True):
