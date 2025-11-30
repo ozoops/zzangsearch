@@ -895,29 +895,24 @@ def show_analysis_page(df):
     
     total_count = len(analysis_df)
     avg_age = analysis_df['나이'].mean() if '나이' in analysis_df.columns else None
-    avg_term = analysis_df['선수_숫자'].mean() if '선수_숫자' in analysis_df.columns else None
     
-    # 임기 만료 임박 (6개월 이내)
-    today = datetime.now()
-    six_months_later = today + pd.DateOffset(months=6)
+    # 최다선 계산
+    max_term = analysis_df['선수_숫자'].max() if '선수_숫자' in analysis_df.columns else 0
+    max_term_count = len(analysis_df[analysis_df['선수_숫자'] == max_term]) if max_term > 0 else 0
     
-    if '임기만료일_dt' in analysis_df.columns and not analysis_df['임기만료일_dt'].isna().all():
-        expiring_soon = analysis_df[
-            (analysis_df['임기만료일_dt'] >= today) & 
-            (analysis_df['임기만료일_dt'] <= six_months_later)
-        ]
-        expiring_count = len(expiring_soon)
-    else:
-        expiring_count = 0
+    # 부가의결권 보유 수 계산
+    vote_count_kpi = 0
+    if '부가의결권' in analysis_df.columns:
+        vote_count_kpi = len(analysis_df[analysis_df['부가의결권'].astype(str).str.strip() == '여'])
 
     with kpi_row1_col1:
         st.metric("전체 조합장 수", f"{total_count}명")
     with kpi_row1_col2:
         st.metric("평균 연령", f"{avg_age:.1f}세" if pd.notnull(avg_age) else "-")
     with kpi_row2_col1:
-        st.metric("평균 당선 횟수", f"{avg_term:.1f}선" if pd.notnull(avg_term) else "-")
+        st.metric("최다선 기록", f"{int(max_term)}선 ({max_term_count}명)" if max_term > 0 else "-")
     with kpi_row2_col2:
-        st.metric("임기 만료 임박(6개월)", f"{expiring_count}명", delta_color="inverse")
+        st.metric("부가의결권 보유", f"{vote_count_kpi}개소", delta_color="off")
 
     st.divider()
 
