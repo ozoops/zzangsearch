@@ -1048,8 +1048,14 @@ def show_analysis_page(df):
     st.subheader("🔎 상세 데이터 탐색")
     st.write("원하는 컬럼을 선택하여 세부 분포를 확인할 수 있습니다.")
     
-    columns = [col for col in df.columns if col not in ['정제성명', '정제농축협명', '정제농축협명핵심', '사진ID', '사진키', '사진번호']]
-    selected_column = st.selectbox("분석할 컬럼 선택", columns, index=columns.index('시군') if '시군' in columns else 0)
+    exclude_cols = [
+        '정제성명', '정제농축협명', '정제농축협명핵심', '사진ID', '사진키', '사진번호',
+        '순번', '시도', '성명', '주요경력', '임기시작일', '임기만료일', '부가의결권', '비고'
+    ]
+    columns = [col for col in df.columns if col not in exclude_cols]
+    
+    default_idx = columns.index('시군') if '시군' in columns else 0
+    selected_column = st.selectbox("분석할 컬럼 선택", columns, index=default_idx)
     
     if selected_column:
         val_counts = df[selected_column].value_counts().reset_index()
