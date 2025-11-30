@@ -920,7 +920,7 @@ def show_analysis_page(df):
     st.divider()
 
     # --- 탭 구성 ---
-    tab1, tab2, tab3 = st.tabs(["📈 인구/유형 분석", "🗺️ 지역별 분석", "📅 임기/선거 분석"])
+    tab1, tab2, tab3 = st.tabs(["📈 인구/유형 분석", "🗺️ 지역별 분석", "�️ 부가의결권 분석"])
 
     with tab1:
         col1, col2 = st.columns(2)
@@ -989,21 +989,59 @@ def show_analysis_page(df):
                 st.dataframe(region_counts)
 
     with tab3:
-        st.subheader("연도별 임기 만료 예정 현황")
-        if '임기만료년도' in analysis_df.columns:
-            expire_counts = analysis_df['임기만료년도'].value_counts().reset_index()
-            expire_counts.columns = ['년도', '인원수']
-            expire_counts = expire_counts.dropna().sort_values('년도')
-            expire_counts['년도'] = expire_counts['년도'].astype(int).astype(str)
+        st.subheader("🗳️ 부가의결권 보유 현황")
+        if '부가의결권' in analysis_df.columns:
+            # 부가의결권 값이 '여'인 데이터 필터링 (공백 제거 등 전처리)
+            vote_df = analysis_df[analysis_df['부가의결권'].astype(str).str.strip() == '여']
+            vote_count = len(vote_df)
+            vote_ratio = (vote_count / total_count * 100) if total_count > 0 else 0
             
-            chart_expire = alt.Chart(expire_counts).mark_line(point=True).encode(
-                x=alt.X('년도', title='임기 만료 연도'),
-                y=alt.Y('인원수', title='인원(명)'),
-                tooltip=['년도', '인원수']
-            ).properties(height=350)
-            st.altair_chart(chart_expire, use_container_width=True)
+            # 요약 메트릭
+            col_v1, col_v2 = st.columns(2)
+            with col_v1:
+                st.metric("부가의결권 보유 조합 수", f"{vote_count}개")
+            with col_v2:
+                st.metric("전체 대비 비율", f"{vote_ratio:.1f}%")
             
-            st.info("💡 특정 연도에 임기 만료가 집중되어 있다면, 해당 시기에 전국 동시 조합장 선거가 예정되어 있을 가능성이 높습니다.")
+            st.divider()
+            
+            # 시각화: 지역별 분포
+            col_g1, col_g2 = st.columns(2)
+            
+            with col_g1:
+                st.markdown("###### 지역별 부가의결권 보유 분포")
+                if '시도' in vote_df.columns:
+                    vote_region_counts = vote_df['시도'].value_counts().reset_index()
+                    vote_region_counts.columns = ['지역', '보유수']
+                    
+                    chart_vote_region = alt.Chart(vote_region_counts).mark_bar().encode(
+                        x=alt.X('지역', sort='-y', title='지역'),
+                        y=alt.Y('보유수', title='조합 수'),
+                        color=alt.value('#8b5cf6'),
+                        tooltip=['지역', '보유수']
+                    ).properties(height=300)
+                    st.altair_chart(chart_vote_region, use_container_width=True)
+
+            with col_g2:
+                st.markdown("###### 유형별 부가의결권 보유 분포")
+                if '유형' in vote_df.columns:
+                    vote_type_counts = vote_df['유형'].value_counts().reset_index()
+                    vote_type_counts.columns = ['유형', '보유수']
+                    
+                    chart_vote_type = alt.Chart(vote_type_counts).mark_arc(innerRadius=40).encode(
+                        theta=alt.Theta("보유수", stack=True),
+                        color=alt.Color("유형", legend=alt.Legend(title="유형"), scale=alt.Scale(scheme='pastel1')),
+                        tooltip=["유형", "보유수"],
+                        order=alt.Order("보유수", sort="descending")
+                    ).properties(height=300)
+                    st.altair_chart(chart_vote_type, use_container_width=True)
+            
+            st.markdown("###### 부가의결권 보유 조합 목록")
+            with st.expander("목록 보기 (클릭)", expanded=True):
+                display_cols = [c for c in ['농축협명', '성명', '시도', '시군', '유형'] if c in vote_df.columns]
+                st.dataframe(vote_df[display_cols].reset_index(drop=True))
+        else:
+            st.warning("데이터에 '부가의결권' 컬럼이 존재하지 않습니다.")
 
     # --- 상세 데이터 탐색 (기존 기능 유지 및 개선) ---
     st.divider()
