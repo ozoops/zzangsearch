@@ -871,6 +871,10 @@ def show_analysis_page(df):
     if '출생연도' in analysis_df.columns:
         analysis_df['출생연도_숫자'] = pd.to_numeric(analysis_df['출생연도'], errors='coerce')
         analysis_df['나이'] = analysis_df['출생연도_숫자'].apply(lambda x: current_year - x if pd.notnull(x) else None)
+        
+        # 이상치 필터링 (나이가 0 이하이거나 120 이상인 경우 제외)
+        # 예: 오기입된 데이터(19564년생 등)로 인한 평균 왜곡 방지
+        analysis_df.loc[(analysis_df['나이'] <= 0) | (analysis_df['나이'] > 120), '나이'] = None
     else:
         analysis_df['나이'] = None
     
