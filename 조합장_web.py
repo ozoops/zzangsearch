@@ -9,7 +9,7 @@ import gspread
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
 from html import escape
 import streamlit.components.v1 as components
@@ -519,6 +519,28 @@ def download_excel_from_drive(creds_info, file_id: str, logs: list, worksheet: s
         return None
 
 
+@st.cache_data(ttl=60)
+def get_drive_image_bytes(file_id: str):
+    creds_info = load_service_account_info()
+    if not creds_info:
+        return None
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            creds_info,
+            scopes=["https://www.googleapis.com/auth/drive.readonly"],
+        )
+        service = build("drive", "v3", credentials=creds)
+        request = service.files().get_media(fileId=file_id)
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        return buffer.getvalue()
+    except Exception as e:
+        print(f"Error downloading image {file_id}: {e}")
+        return None
+
 FOLDER_ID = "1F66ImTp4VxdPW2W-5jrGoJW1x72Y43Zy"
 
 
@@ -535,21 +557,33 @@ def list_drive_photos(folder_id: str = FOLDER_ID):
             scopes=["https://www.googleapis.com/auth/drive.readonly"],
         )
         service = build("drive", "v3", credentials=creds)
-        response = service.files().list(
-            q=f"'{folder_id}' in parents and trashed=false",
-            fields="files(id, name)",
-        ).execute()
-        files = response.get("files", [])
-    except Exception:
+        
+        files = []
+        page_token = None
+        while True:
+            response = service.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields="nextPageToken, files(id, name)",
+                orderBy="createdTime desc",
+                pageSize=1000,
+                pageToken=page_token
+            ).execute()
+            files.extend(response.get("files", []))
+            page_token = response.get("nextPageToken", None)
+            if not page_token:
+                break
+    except Exception as e:
+        print(f"Error fetching photos: {e}")
         return []
 
     results = []
+    ts = int(datetime.now().timestamp())
     for file in files:
         file_id = file.get("id")
         name = file.get("name", "")
         if not file_id or not name:
             continue
-        url = f"https://drive.google.com/uc?export=view&id={file_id}"
+        url = f"https://drive.google.com/uc?export=view&id={file_id}&t={ts}"
         results.append({"id": file_id, "name": name, "url": url})
     return results
 
@@ -559,9 +593,10 @@ def build_photo_lookup():
     """Return mapping from photo key (file stem) to URL."""
     lookup = {}
     for item in list_drive_photos():
-        stem = Path(item["name"]).stem.strip()
-        if stem:
-            lookup[stem] = item["url"]
+        stem = Path(item["name"]).stem
+        norm_stem = _normalize_token(stem)
+        if norm_stem and norm_stem not in lookup:
+            lookup[norm_stem] = item["id"]
     return lookup
 
 DEFAULT_THEME = "light"
@@ -651,12 +686,18 @@ def load_data():
     df['정제농축협명'] = df['농축협명'].astype(str).str.replace(' ', '').str.strip()
     df['정제농축협명핵심'] = df['정제농축협명'].str.replace('농협', '', regex=False)
     logs.append("데이터 로딩 완료")
-    return df, datetime.now(), source, logs
+    kst = timezone(timedelta(hours=9))
+    return df, datetime.now(kst), source, logs
 
 df, data_loaded_at, data_source, load_logs = load_data()
 
 st.sidebar.caption(f"데이터 갱신: {data_loaded_at.strftime('%Y-%m-%d %H:%M:%S')}")
 st.sidebar.caption(f"데이터 출처: {data_source}")
+
+if st.sidebar.button("🔄 데이터/사진 최신화 (새로고침)"):
+    st.cache_data.clear()
+    st.rerun()
+
 with st.sidebar.expander("로딩 로그", expanded=False):
     for entry in load_logs:
         st.write(f"- {entry}")
@@ -811,17 +852,28 @@ def show_search_page(df):
                     if name_value and name_value not in candidates:
                         candidates.append(name_value)
 
-                    photo_url = None
+                    photo_id = None
                     for key in candidates:
-                        if key in photo_lookup:
-                            photo_url = photo_lookup[key]
+                        norm_key = _normalize_token(key)
+                        if norm_key in photo_lookup:
+                            photo_id = photo_lookup[norm_key]
                             break
 
                     photo_key = next((candidate for candidate in candidates if candidate), None)
                     photo_path = f"photo/{photo_key}.jpg" if photo_key else None
-                    if photo_url:
-                        st.image(photo_url, caption=f"{row['성명']} 조합장 사진", width=180)
+                    if photo_id:
+                        img_bytes = get_drive_image_bytes(photo_id)
+                        if img_bytes:
+                            st.info("🌐 구글 드라이브 지정 사진 적용 완료")
+                            st.image(img_bytes, caption=f"{row['성명']} 조합장 사진", width=180)
+                        else:
+                            st.info("⚠️ 구글 드라이브 사진 로드 실패, 로컬 폴더 사진으로 대체합니다.")
+                            if photo_path and os.path.exists(photo_path):
+                                st.image(photo_path, caption=f"{row['성명']} 조합장 사진", width=180)
+                            else:
+                                st.info("📁 등록된 사진이 없습니다.")
                     elif photo_path and os.path.exists(photo_path):
+                        st.info("📁 로컬(Local) 사진 폴더 사진 적용")
                         st.image(photo_path, caption=f"{row['성명']} 조합장 사진", width=180)
                     else:
                         st.info("📁 등록된 사진이 없습니다.")
@@ -867,7 +919,8 @@ def show_analysis_page(df):
     analysis_df = df.copy()
     
     # 1. 나이 계산
-    current_year = datetime.now().year
+    kst = timezone(timedelta(hours=9))
+    current_year = datetime.now(kst).year
     if '출생연도' in analysis_df.columns:
         analysis_df['출생연도_숫자'] = pd.to_numeric(analysis_df['출생연도'], errors='coerce')
         analysis_df['나이'] = analysis_df['출생연도_숫자'].apply(lambda x: current_year - x if pd.notnull(x) else None)
